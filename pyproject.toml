@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kg-extract"
+version = "0.1.0"
+description = "Deterministic NSF Awards CSV to knowledge graph triple extraction"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "kg-extract contributors"}]
+dependencies = []
+
+[project.optional-dependencies]
+kggen = ["kg-gen>=0.4.0"]
+uie = ["paddlepaddle>=2.6.0", "paddlenlp>=2.8.1"]
+all = [
+  "kg-gen>=0.4.0",
+  "paddlepaddle>=2.6.0",
+  "paddlenlp>=2.8.1",
+]
+
+[project.scripts]
+kg-extract = "kg_extract.cli:main"
+
+[tool.setuptools]
