@@ -13,6 +13,8 @@ from .abstracts import (
 )
 from .extractor import DEFAULT_BASE_URI, extract_awards, write_csv, write_ntriples
 from .keywords import (
+    DEFAULT_LLM_KEYWORD_MODEL_PATH,
+    DEFAULT_LLM_KEYWORD_REPO_ID,
     KeyBERTKeywordBackend,
     LLMKeywordBackend,
     MissingKeywordDependency,
@@ -150,8 +152,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--keyword-llm-model-path",
-        default="/data/cyang314/kg",
+        default=DEFAULT_LLM_KEYWORD_MODEL_PATH,
         help="Local Hugging Face causal-LM path for --keyword-backend llm",
+    )
+    parser.add_argument(
+        "--keyword-llm-repo-id",
+        default=DEFAULT_LLM_KEYWORD_REPO_ID,
+        help=(
+            "Hugging Face repo id to download when the local LLM model path is "
+            f"incomplete (default: {DEFAULT_LLM_KEYWORD_REPO_ID})"
+        ),
+    )
+    parser.add_argument(
+        "--keyword-llm-revision",
+        help="Optional Hugging Face model revision, branch, or commit for LLM download",
+    )
+    parser.add_argument(
+        "--keyword-llm-no-download",
+        action="store_true",
+        help="Fail instead of downloading the local LLM model when files are missing",
     )
     parser.add_argument(
         "--keyword-llm-max-new-tokens",
@@ -317,6 +336,9 @@ def _build_keyword_backend(args: argparse.Namespace):
     if args.keyword_backend == "llm":
         return LLMKeywordBackend(
             model_path=args.keyword_llm_model_path,
+            repo_id=args.keyword_llm_repo_id,
+            revision=args.keyword_llm_revision,
+            allow_download=not args.keyword_llm_no_download,
             max_new_tokens=args.keyword_llm_max_new_tokens,
             temperature=args.keyword_llm_temperature,
             device_map=args.keyword_llm_device_map,

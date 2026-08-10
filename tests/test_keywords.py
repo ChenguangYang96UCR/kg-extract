@@ -6,6 +6,7 @@ from pathlib import Path
 from kg_extract.keywords import (
     KeywordCandidate,
     SimpleKeywordBackend,
+    _is_huggingface_model_dir,
     _parse_llm_keywords,
     canonical_keyword,
     clean_abstract_for_keywords,
@@ -98,6 +99,16 @@ class KeywordNormalizationTests(unittest.TestCase):
             ["quantum sensing", "photonic integrated circuit"],
         )
         self.assertEqual(keywords[0].score, 1.0)
+
+    def test_huggingface_model_dir_detection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            self.assertFalse(_is_huggingface_model_dir(path))
+            (path / "config.json").write_text("{}", encoding="utf-8")
+            (path / "tokenizer_config.json").write_text("{}", encoding="utf-8")
+            self.assertFalse(_is_huggingface_model_dir(path))
+            (path / "model.safetensors").write_text("", encoding="utf-8")
+            self.assertTrue(_is_huggingface_model_dir(path))
 
 
 class KeywordTripleTests(unittest.TestCase):

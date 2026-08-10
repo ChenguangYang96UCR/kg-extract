@@ -28,6 +28,9 @@ NSF_BOILERPLATE_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 
+DEFAULT_LLM_KEYWORD_MODEL_PATH = "/data/cyang314/kg"
+DEFAULT_LLM_KEYWORD_REPO_ID = "deepseek-ai/dspark_qwen3_8b_block7"
+
 STOPWORDS = {
     "a",
     "about",
@@ -389,7 +392,10 @@ class LLMKeywordBackend:
     def __init__(
         self,
         *,
-        model_path: str | Path = "/data/cyang314/kg",
+        model_path: str | Path = DEFAULT_LLM_KEYWORD_MODEL_PATH,
+        repo_id: str = DEFAULT_LLM_KEYWORD_REPO_ID,
+        revision: str | None = None,
+        allow_download: bool = True,
         max_new_tokens: int = 256,
         temperature: float = 0.0,
         device_map: str = "auto",
@@ -399,6 +405,11 @@ class LLMKeywordBackend:
         self.name = f"llm:{Path(self.model_path).name or self.model_path}"
         self.max_new_tokens = max_new_tokens
         self.temperature = temperature
+        self._ensure_model_available(
+            repo_id=repo_id,
+            revision=revision,
+            allow_download=allow_download,
+        )
         try:
             from transformers import AutoModelForCausalLM, AutoTokenizer
         except ImportError as exc:
@@ -418,6 +429,44 @@ class LLMKeywordBackend:
             local_files_only=True,
             trust_remote_code=trust_remote_code,
         )
+
+    def _ensure_model_available(
+        self,
+        *,
+        repo_id: str,
+        revision: str | None,
+        allow_download: bool,
+    ) -> None:
+        model_path = Path(self.model_path)
+        if _is_huggingface_model_dir(model_path):
+            return
+        if not allow_download:
+            raise MissingKeywordDependency(
+                f"Local LLM model files were not found in {self.model_path}. "
+                "Remove --keyword-llm-no-download to download them, or pass "
+                "--keyword-llm-model-path to an existing Hugging Face model directory."
+            )
+        try:
+            from huggingface_hub import snapshot_download
+        except ImportError as exc:
+            raise MissingKeywordDependency(
+                "huggingface-hub is not installed. Run: python3 -m pip install -e '.[llm]'"
+            ) from exc
+
+        model_path.mkdir(parents=True, exist_ok=True)
+        snapshot_options = {
+            "repo_id": repo_id,
+            "local_dir": str(model_path),
+        }
+        if revision:
+            snapshot_options["revision"] = revision
+        snapshot_download(**snapshot_options)
+
+        if not _is_huggingface_model_dir(model_path):
+            raise MissingKeywordDependency(
+                f"Downloaded files from {repo_id} to {self.model_path}, but the "
+                "directory still does not look like a complete Hugging Face model."
+            )
 
     def extract(
         self,
@@ -610,6 +659,34 @@ def _extract_line_keywords(response: str) -> list[str]:
         if line:
             values.append(line)
     return values
+
+
+def _is_huggingface_model_dir(path: str | Path) -> bool:
+    path = Path(path)
+    if not path.is_dir():
+        return False
+    has_config = (path / "config.json").is_file()
+    has_tokenizer = any(
+        (path / name).is_file()
+        for name in (
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "vocab.json",
+            "vocab.txt",
+        )
+    )
+    has_weights = any(
+        any(path.glob(pattern)) for pattern in _MODEL_WEIGHT_PATTERNS
+    )
+    return has_config and has_tokenizer and has_weights
+
+
+_MODEL_WEIGHT_PATTERNS = (
+    "*.safetensors",
+    "model.safetensors.index.json",
+    "pytorch_model.bin",
+    "pytorch_model.bin.index.json",
+)
 
 
 def canonical_keyword(label: str, *, noun_filter: bool = False) -> str:

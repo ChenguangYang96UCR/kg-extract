@@ -313,8 +313,10 @@ kg-extract /path/to/Awards.csv \
 ```
 
 The LLM backend loads model weights with `local_files_only=True`, so the model
-directory must already contain the Hugging Face tokenizer, config, and weight
-files.
+is always loaded from the local directory. If the directory is missing or
+incomplete, the backend first downloads
+`deepseek-ai/dspark_qwen3_8b_block7` from Hugging Face into that directory. Use
+`--keyword-llm-no-download` to require a fully offline local load.
 
 `keywords.csv` records `award_number`, raw `keyword`, `canonical_keyword`, `score`, `extractor`, and `evidence`. `keyword_triples.csv` and `keyword_triples.nt` contain only the triples produced by the keyword stage, while `triples.csv` and `triples.nt` include them together with the structured and optional Abstract relation triples.
 
