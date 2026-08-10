@@ -148,6 +148,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum keyword n-gram length (default: 3)",
     )
     parser.add_argument(
+        "--keyword-noun-filter",
+        action="store_true",
+        help="Prefer noun-like keyword phrases by trimming or dropping verb-led candidates",
+    )
+    parser.add_argument(
         "--keyword-cluster",
         action="store_true",
         help="Merge semantically similar keywords with sentence-transformers embeddings",
@@ -208,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
                 min_score=args.keyword_min_score,
                 ngram_range=(args.keyword_ngram_min, args.keyword_ngram_max),
                 clusterer=keyword_clusterer,
+                noun_filter=args.keyword_noun_filter,
             )
         except (MissingKeywordDependency, ValueError) as exc:
             raise SystemExit(str(exc)) from exc

@@ -64,6 +64,17 @@ class KeywordNormalizationTests(unittest.TestCase):
         self.assertEqual(canonical_keyword("Digital Tutors"), "digital tutor")
         self.assertEqual(canonical_keyword("LLMs"), "large language model")
 
+    def test_noun_filter_removes_or_trims_verb_led_candidates(self):
+        self.assertEqual(
+            canonical_keyword("developing groundbreaking chips", noun_filter=True),
+            "groundbreaking chip",
+        )
+        self.assertEqual(canonical_keyword("led university michigan", noun_filter=True), "")
+        self.assertEqual(
+            canonical_keyword("driving substantial societal", noun_filter=True),
+            "",
+        )
+
     def test_simple_backend_scores_are_normalized(self):
         backend = SimpleKeywordBackend()
         keywords = backend.extract(
@@ -110,6 +121,58 @@ class KeywordTripleTests(unittest.TestCase):
                 triple.object == "https://example.org/nsf/vocab/Keyword"
                 for triple in triples
             )
+        )
+
+    def test_noun_filter_keeps_clean_topic_nodes(self):
+        class FakeActionBackend:
+            name = "fake:actions"
+
+            def extract(self, text, *, top_k, ngram_range):
+                del text, top_k, ngram_range
+                return [
+                    KeywordCandidate(
+                        "developing groundbreaking chips",
+                        0.91,
+                        "The team is developing groundbreaking chips.",
+                    ),
+                    KeywordCandidate(
+                        "led university michigan",
+                        0.82,
+                        "The team is led by the University of Michigan.",
+                    ),
+                    KeywordCandidate(
+                        "quantum photonic circuits",
+                        0.80,
+                        "Quantum photonic circuits are developed.",
+                    ),
+                ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "awards.csv"
+            with path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle, fieldnames=["AwardNumber", "Title", "Abstract"]
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "AwardNumber": "1",
+                        "Title": "Award 1",
+                        "Abstract": "This project develops quantum photonic circuits.",
+                    }
+                )
+
+            _, assignments, stats = extract_keyword_triples(
+                path,
+                FakeActionBackend(),
+                top_k=3,
+                noun_filter=True,
+            )
+
+        self.assertEqual(stats.keywords, 2)
+        self.assertEqual(
+            {assignment.canonical_keyword for assignment in assignments},
+            {"groundbreaking chip", "quantum photonic circuit"},
         )
 
     def test_embedding_clusterer_can_merge_similar_keyword_nodes(self):

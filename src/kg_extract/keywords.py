@@ -100,6 +100,112 @@ STOPWORDS = {
     "worthy",
 }
 
+NOUN_FILTER_TRIM_PREFIXES = {
+    "advance",
+    "advances",
+    "advanced",
+    "advancing",
+    "build",
+    "building",
+    "builds",
+    "built",
+    "combine",
+    "combines",
+    "combining",
+    "create",
+    "created",
+    "creates",
+    "creating",
+    "design",
+    "designed",
+    "designing",
+    "designs",
+    "develop",
+    "developed",
+    "developing",
+    "develops",
+    "enable",
+    "enabled",
+    "enables",
+    "enabling",
+    "evaluate",
+    "evaluated",
+    "evaluates",
+    "evaluating",
+    "improve",
+    "improved",
+    "improves",
+    "improving",
+    "integrate",
+    "integrated",
+    "integrates",
+    "integrating",
+    "install",
+    "installed",
+    "installing",
+    "installs",
+    "make",
+    "made",
+    "makes",
+    "making",
+    "measure",
+    "measured",
+    "measures",
+    "measuring",
+    "reach",
+    "reached",
+    "reaches",
+    "reaching",
+    "transform",
+    "transformed",
+    "transforming",
+    "transforms",
+    "use",
+    "used",
+    "uses",
+}
+
+NOUN_FILTER_REJECT_PREFIXES = {
+    "address",
+    "addresses",
+    "addressing",
+    "drive",
+    "drives",
+    "driving",
+    "characterize",
+    "characterized",
+    "characterizes",
+    "characterizing",
+    "facilitate",
+    "facilitates",
+    "facilitating",
+    "led",
+    "promote",
+    "promotes",
+    "promoting",
+    "revolutionize",
+    "revolutionizes",
+    "revolutionizing",
+    "strengthen",
+    "strengthened",
+    "strengthening",
+    "strengthens",
+    "streamline",
+    "streamlines",
+    "streamlining",
+    "understand",
+    "understanding",
+    "understands",
+}
+
+NOUN_FILTER_BAD_FINAL_WORDS = {
+    "accessible",
+    "deployable",
+    "existing",
+    "practical",
+    "societal",
+}
+
 
 class MissingKeywordDependency(MissingBackendDependency):
     """Raised when an optional keyword extraction backend is not installed."""
@@ -331,13 +437,15 @@ def clean_abstract_for_keywords(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def canonical_keyword(label: str) -> str:
+def canonical_keyword(label: str, *, noun_filter: bool = False) -> str:
     """Normalize a candidate keyphrase into a stable, readable graph label."""
     label = unicodedata.normalize("NFKD", label).encode("ascii", "ignore").decode()
     label = _expand_keyword_aliases(label)
     label = re.sub(r"[^a-zA-Z0-9]+", " ", label).casefold()
     tokens = [token for token in label.split() if token and token not in STOPWORDS]
     tokens = [_singularize(token) for token in tokens]
+    if noun_filter:
+        tokens = _noun_filter_tokens(tokens)
     return " ".join(tokens)
 
 
@@ -351,6 +459,7 @@ def extract_keyword_triples(
     min_score: float = 0.0,
     ngram_range: tuple[int, int] = (1, 3),
     clusterer: KeywordClusterer | None = None,
+    noun_filter: bool = False,
 ) -> tuple[list[Triple], list[KeywordAssignment], KeywordExtractionStats]:
     if top_k <= 0:
         raise ValueError("Keyword top-k must be greater than zero")
@@ -376,7 +485,7 @@ def extract_keyword_triples(
             for candidate in backend.extract(text, top_k=top_k, ngram_range=ngram_range):
                 if candidate.score < min_score:
                     continue
-                canonical = canonical_keyword(candidate.label)
+                canonical = canonical_keyword(candidate.label, noun_filter=noun_filter)
                 if not canonical or canonical in seen_for_award:
                     continue
                 seen_for_award.add(canonical)
@@ -394,7 +503,11 @@ def extract_keyword_triples(
                     )
                 )
 
-    cluster_map = _keyword_cluster_map(records, clusterer=clusterer)
+    cluster_map = _keyword_cluster_map(
+        records,
+        clusterer=clusterer,
+        noun_filter=noun_filter,
+    )
     extractor_name = backend.name if clusterer is None else f"{backend.name}+{clusterer.name}"
     assignments: list[KeywordAssignment] = []
     labelled: set[str] = set()
@@ -472,6 +585,7 @@ def _keyword_cluster_map(
     records: Sequence[_KeywordRecord],
     *,
     clusterer: KeywordClusterer | None,
+    noun_filter: bool,
 ) -> dict[str, str]:
     labels = [record.normalized_keyword for record in records]
     if clusterer is None:
@@ -483,7 +597,7 @@ def _keyword_cluster_map(
         )
     cluster_map = clusterer.cluster(labels, scores=scores)
     return {
-        label: canonical_keyword(cluster_map.get(label, label))
+        label: canonical_keyword(cluster_map.get(label, label), noun_filter=noun_filter)
         for label in labels
     }
 
@@ -534,6 +648,23 @@ def _singularize(token: str) -> str:
     if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
         return token[:-1]
     return token
+
+
+def _noun_filter_tokens(tokens: Sequence[str]) -> list[str]:
+    tokens = [token for token in tokens if token and token not in STOPWORDS]
+    while tokens and tokens[0] in NOUN_FILTER_TRIM_PREFIXES:
+        tokens = tokens[1:]
+    if not tokens:
+        return []
+    if tokens[0] in NOUN_FILTER_REJECT_PREFIXES:
+        return []
+    if len(tokens) < 2:
+        return []
+    if tokens[-1] in NOUN_FILTER_BAD_FINAL_WORDS:
+        return []
+    if tokens[-1].endswith("ing") or tokens[-1].endswith("ly"):
+        return []
+    return list(tokens)
 
 
 def _expand_keyword_aliases(label: str) -> str:

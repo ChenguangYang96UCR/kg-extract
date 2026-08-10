@@ -238,12 +238,41 @@ kg-extract /path/to/Awards.csv \
   --keyword-top-k 8 \
   --keyword-ngram-min 2 \
   --keyword-ngram-max 3 \
+  --keyword-noun-filter \
   --keyword-cluster \
   --keyword-cluster-threshold 0.82
 ```
 
+The helper script uses the same recommended settings and automatically places the
+dataset name and year in the output folder when the second argument is omitted:
+
+```bash
+bash scripts/run_keybert_keywords.sh "data/Quantum/filtered/awards_start_2024.csv"
+# writes to output-keybert-clean/quantum/2024
+
+bash scripts/run_keybert_keywords.sh "data/digital twins/filtered/awards_start_2025_2026.csv"
+# writes to output-keybert-clean/digital-twins/2025_2026
+```
+
+```bash
+kg-extract 'data/Quantum/filtered/awards_start_2024.csv' \
+  --output-dir output-keybert \
+  --keyword-backend keybert \
+  --keyword-model sentence-transformers/all-MiniLM-L6-v2 \
+  --keyword-top-k 8 \
+  --keyword-ngram-min 1 \
+  --keyword-noun-filter \
+  --keyword-cluster \
+  --keyword-ngram-max 3
+
+```
+
+
 Keyword normalization performs lowercasing, punctuation removal, stopword filtering,
 basic singularization, common acronym expansion, and slug-based URI generation.
+`--keyword-noun-filter` additionally removes or trims verb-led candidates so phrases
+such as `developing groundbreaking chips` become `groundbreaking chip`, while
+relation-like phrases such as `led university michigan` are discarded.
 Embedding clustering runs after this rule-based normalization so labels such as
 `language model` and `large language model` can be mapped to one Keyword node when
 their sentence-transformer embeddings are similar enough.
