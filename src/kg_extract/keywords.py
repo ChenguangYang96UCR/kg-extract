@@ -32,6 +32,9 @@ DEFAULT_LLM_KEYWORD_MODEL_PATH = "/data/cyang314/kg/Qwen3-8B"
 DEFAULT_LLM_KEYWORD_REPO_ID = "Qwen/Qwen3-8B"
 DEFAULT_LITELLM_KEYWORD_MODEL = "ollama_chat/deepseek-r1:14b"
 DEFAULT_LITELLM_API_BASE = "http://localhost:11434"
+DEFAULT_TINKER_API_BASE = "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1"
+DEFAULT_TINKER_API_KEY_ENV = "TINKER_API_KEY"
+DEFAULT_TINKER_MODEL_ENV = "TINKER_MODEL"
 
 STOPWORDS = {
     "a",
@@ -539,14 +542,18 @@ class LiteLLMKeywordBackend:
         *,
         model: str = DEFAULT_LITELLM_KEYWORD_MODEL,
         api_base: str | None = DEFAULT_LITELLM_API_BASE,
+        api_key: str | None = None,
         temperature: float = 0.0,
         max_tokens: int = 256,
+        extra_body: dict[str, object] | None = None,
     ) -> None:
         self.name = f"litellm:{model}"
         self.model = model
         self.api_base = api_base or None
+        self.api_key = api_key
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.extra_body = extra_body or {}
         try:
             from litellm import completion
         except ImportError as exc:
@@ -563,9 +570,9 @@ class LiteLLMKeywordBackend:
         ngram_range: tuple[int, int],
     ) -> list[KeywordCandidate]:
         prompt = _llm_keyword_prompt(text, top_k=top_k, ngram_range=ngram_range)
-        response = self.completion(
-            model=self.model,
-            messages=[
+        request_options: dict[str, object] = {
+            "model": self.model,
+            "messages": [
                 {
                     "role": "system",
                     "content": (
@@ -575,10 +582,15 @@ class LiteLLMKeywordBackend:
                 },
                 {"role": "user", "content": prompt},
             ],
-            api_base=self.api_base,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-        )
+            "api_base": self.api_base,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+        if self.api_key:
+            request_options["api_key"] = self.api_key
+        if self.extra_body:
+            request_options["extra_body"] = self.extra_body
+        response = self.completion(**request_options)
         content = response.choices[0].message.content or ""
         content = _strip_thinking_blocks(content)
         return _parse_llm_keywords(content, top_k=top_k, text=text)
@@ -731,6 +743,14 @@ def _extract_line_keywords(response: str) -> list[str]:
 
 def _strip_thinking_blocks(response: str) -> str:
     return re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL | re.IGNORECASE).strip()
+
+
+def litellm_openai_compatible_model(model: str) -> str:
+    """Route an OpenAI-compatible endpoint through LiteLLM's OpenAI provider."""
+    model = model.strip()
+    if model.startswith("openai/"):
+        return model
+    return f"openai/{model}"
 
 
 def _is_huggingface_model_dir(path: str | Path) -> bool:

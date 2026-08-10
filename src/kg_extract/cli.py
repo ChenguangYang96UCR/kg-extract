@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from .abstracts import (
@@ -17,6 +18,9 @@ from .keywords import (
     DEFAULT_LLM_KEYWORD_REPO_ID,
     DEFAULT_LITELLM_API_BASE,
     DEFAULT_LITELLM_KEYWORD_MODEL,
+    DEFAULT_TINKER_API_BASE,
+    DEFAULT_TINKER_API_KEY_ENV,
+    DEFAULT_TINKER_MODEL_ENV,
     KeyBERTKeywordBackend,
     LLMKeywordBackend,
     LiteLLMKeywordBackend,
@@ -25,6 +29,7 @@ from .keywords import (
     YakeKeywordBackend,
     EmbeddingKeywordClusterer,
     extract_keyword_triples,
+    litellm_openai_compatible_model,
     write_keyword_assignments_csv,
 )
 
@@ -115,7 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--keyword-backend",
-        choices=("none", "simple", "keybert", "yake", "llm", "litellm"),
+        choices=("none", "simple", "keybert", "yake", "llm", "litellm", "tinker"),
         default="none",
         help="Optional Abstract keyword extractor (default: none)",
     )
@@ -213,6 +218,41 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.0,
         help="Sampling temperature for LiteLLM keyword extraction (default: 0.0)",
+    )
+    parser.add_argument(
+        "--keyword-tinker-model",
+        help=(
+            "Tinker sampler checkpoint path for --keyword-backend tinker, for example "
+            "'tinker://.../sampler_weights/...'. Can also be set with "
+            f"{DEFAULT_TINKER_MODEL_ENV}."
+        ),
+    )
+    parser.add_argument(
+        "--keyword-tinker-api-base",
+        default=DEFAULT_TINKER_API_BASE,
+        help=f"Tinker OpenAI-compatible API base URL (default: {DEFAULT_TINKER_API_BASE})",
+    )
+    parser.add_argument(
+        "--keyword-tinker-api-key-env",
+        default=DEFAULT_TINKER_API_KEY_ENV,
+        help=f"Environment variable containing the Tinker API key (default: {DEFAULT_TINKER_API_KEY_ENV})",
+    )
+    parser.add_argument(
+        "--keyword-tinker-max-tokens",
+        type=int,
+        default=256,
+        help="Maximum generated tokens for Tinker keyword extraction (default: 256)",
+    )
+    parser.add_argument(
+        "--keyword-tinker-temperature",
+        type=float,
+        default=0.0,
+        help="Sampling temperature for Tinker keyword extraction (default: 0.0)",
+    )
+    parser.add_argument(
+        "--keyword-tinker-reasoning-effort",
+        choices=("none", "minimal", "low", "medium", "high", "xhigh"),
+        help="Optional Tinker reasoning effort for chat completions.",
     )
     parser.add_argument(
         "--keyword-noun-filter",
@@ -374,6 +414,24 @@ def _build_keyword_backend(args: argparse.Namespace):
             api_base=args.keyword_litellm_api_base,
             temperature=args.keyword_litellm_temperature,
             max_tokens=args.keyword_litellm_max_tokens,
+        )
+    if args.keyword_backend == "tinker":
+        model = args.keyword_tinker_model or os.environ.get(DEFAULT_TINKER_MODEL_ENV)
+        if not model:
+            raise ValueError(
+                "Tinker keyword extraction requires --keyword-tinker-model or "
+                f"{DEFAULT_TINKER_MODEL_ENV}."
+            )
+        extra_body: dict[str, object] = {"separate_reasoning": True}
+        if args.keyword_tinker_reasoning_effort:
+            extra_body["reasoning_effort"] = args.keyword_tinker_reasoning_effort
+        return LiteLLMKeywordBackend(
+            model=litellm_openai_compatible_model(model),
+            api_base=args.keyword_tinker_api_base,
+            api_key=api_key_from_environment(args.keyword_tinker_api_key_env),
+            temperature=args.keyword_tinker_temperature,
+            max_tokens=args.keyword_tinker_max_tokens,
+            extra_body=extra_body,
         )
     return YakeKeywordBackend()
 

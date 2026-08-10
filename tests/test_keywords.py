@@ -14,6 +14,7 @@ from kg_extract.keywords import (
     canonical_keyword,
     clean_abstract_for_keywords,
     extract_keyword_triples,
+    litellm_openai_compatible_model,
 )
 
 
@@ -116,6 +117,17 @@ class KeywordNormalizationTests(unittest.TestCase):
         self.assertIn("1 to 2 words", prompt)
         self.assertIn("short noun topic", prompt)
         self.assertIn("Do not return verbs", prompt)
+
+    def test_openai_compatible_model_prefix_is_added_once(self):
+        model = "tinker://example:train:0/sampler_weights/000080"
+        self.assertEqual(
+            litellm_openai_compatible_model(model),
+            f"openai/{model}",
+        )
+        self.assertEqual(
+            litellm_openai_compatible_model(f"openai/{model}"),
+            f"openai/{model}",
+        )
 
     def test_huggingface_model_dir_detection(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -353,6 +353,35 @@ kg-extract /path/to/Awards.csv \
 The helper script [scripts/run_llm_keywords.sh](scripts/run_llm_keywords.sh)
 uses this Ollama/LiteLLM backend by default.
 
+### Tinker keyword extraction
+
+Tinker exposes an OpenAI-compatible inference endpoint for sampler checkpoints.
+Use this backend when the model name is a Tinker checkpoint path such as
+`tinker://.../sampler_weights/...`.
+
+```bash
+python3 -m pip install -e '.[litellm]'
+
+export TINKER_API_KEY="..."
+export TINKER_MODEL="tinker://.../sampler_weights/..."
+
+kg-extract /path/to/Awards.csv \
+  --output-dir output-tinker-keywords \
+  --keyword-backend tinker \
+  --keyword-tinker-model "${TINKER_MODEL}" \
+  --keyword-tinker-api-key-env TINKER_API_KEY \
+  --keyword-top-k 8 \
+  --keyword-ngram-min 1 \
+  --keyword-ngram-max 2 \
+  --keyword-noun-filter \
+  --keyword-cluster \
+  --keyword-cluster-threshold 0.88
+```
+
+The helper script [scripts/run_tinker_keywords.sh](scripts/run_tinker_keywords.sh)
+uses the same defaults and writes to `output-tinker-keywords/<dataset>/<year>`
+unless an explicit output directory is passed.
+
 `keywords.csv` records `award_number`, raw `keyword`, `canonical_keyword`, `score`, `extractor`, and `evidence`. `keyword_triples.csv` and `keyword_triples.nt` contain only the triples produced by the keyword stage, while `triples.csv` and `triples.nt` include them together with the structured and optional Abstract relation triples.
 
 ## Privacy
