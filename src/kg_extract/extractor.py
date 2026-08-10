@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import hashlib
 import re
 import unicodedata
 from dataclasses import asdict, dataclass
@@ -75,9 +74,7 @@ def slug(value: str) -> str:
 
 
 def entity_uri(base_uri: str, kind: str, label: str) -> str:
-    normalized = " ".join(label.casefold().split())
-    suffix = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:10]
-    return f"{base_uri}{kind}/{slug(label)[:80]}-{suffix}"
+    return f"{base_uri}{kind}/{slug(label)}"
 
 
 def split_values(value: str | None) -> list[str]:

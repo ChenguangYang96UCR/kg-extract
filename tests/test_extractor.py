@@ -6,6 +6,7 @@ from pathlib import Path
 from kg_extract.extractor import (
     SCHEMA,
     clean_excel_literal,
+    entity_uri,
     extract_awards,
     normalize_date,
     normalize_money,
@@ -31,6 +32,12 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(
             parse_co_investigators(value),
             [("Lizy K John", "ljohn@example.edu"), ("Aman Arora", "aman@example.edu")],
+        )
+
+    def test_entity_uri_uses_a_readable_slug_without_a_hash_suffix(self):
+        self.assertEqual(
+            entity_uri("https://example.org/nsf/", "concept", "Digital Tutor"),
+            "https://example.org/nsf/concept/digital-tutor",
         )
 
 

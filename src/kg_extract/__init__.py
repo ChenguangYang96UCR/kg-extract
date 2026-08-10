@@ -8,14 +8,24 @@ from .abstracts import (
     UIEBackend,
     extract_abstract_triples,
 )
+from .keywords import (
+    KeywordAssignment,
+    KeywordCandidate,
+    KeywordExtractionStats,
+    extract_keyword_triples,
+)
 
 __all__ = [
     "AbstractRelation",
     "ExtractionStats",
     "KGGenBackend",
+    "KeywordAssignment",
+    "KeywordCandidate",
+    "KeywordExtractionStats",
     "Triple",
     "UIEBackend",
     "extract_abstract_triples",
     "extract_awards",
+    "extract_keyword_triples",
 ]
 __version__ = "0.1.0"

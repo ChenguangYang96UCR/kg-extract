@@ -65,6 +65,12 @@ When an Abstract backend is enabled, the command also writes Abstract-only debug
 - `output/abstract_triples.csv`
 - `output/abstract_triples.nt`
 
+When keyword extraction is enabled, the command also writes keyword debug outputs:
+
+- `output/keywords.csv`
+- `output/keyword_triples.csv`
+- `output/keyword_triples.nt`
+
 Email addresses, phone numbers, and street addresses are excluded by default. Include them only when needed:
 
 ```bash
@@ -86,11 +92,14 @@ Each CSV row is represented as an Award entity connected to reusable Person, Org
 ```text
 award/2541748  rdf:type                   schema:MonetaryGrant
 award/2541748  schema:name                "CAREER: A Safety-Aware..."
-award/2541748  kg:principalInvestigator   person/chenguang-wang-...
-award/2541748  kg:recipientOrganization   organization/university-of-california-santa-cruz-...
-award/2541748  kg:belongsToProgram        program/info-integration-informatics-...
+award/2541748  kg:principalInvestigator   person/chenguang-wang
+award/2541748  kg:recipientOrganization   organization/university-of-california-santa-cruz
+award/2541748  kg:belongsToProgram        program/info-integration-informatics
 award/2541748  schema:amount              "349875.00"^^xsd:decimal
 ```
+
+Entity URIs use readable slugs without hash suffixes. Labels that normalize to the
+same slug are therefore represented by the same graph node.
 
 `triples.csv` also includes `award_number`, `source_column`, `evidence`, `confidence`, and `extractor`. These fields distinguish deterministic facts from model-generated relations and trace each triple back to its source.
 
@@ -152,8 +161,18 @@ kg-extract /path/to/Awards.csv \
   --abstract-backend uie \
   --abstract-model uie-base-en \
   --uie-schema config/uie_award_schema.json \
-  --min-confidence 0.70 \
-  --abstract-limit 5
+  --min-confidence 0.50 
+```
+
+
+```bash
+kg-extract /Users/chenguangyang/Desktop/ucr_work/kg-extract/data/Quantum/filtered/awards_start_2024.csv \
+  --output-dir output-uie \
+  --abstract-backend uie \
+  --abstract-model uie-base-en \
+  --uie-schema config/uie_award_schema.json \
+  --min-confidence 0.50 
+
 ```
 
 The first UIE run downloads model weights. A custom schema must use PaddleNLP's hierarchical JSON structure, for example:
@@ -169,6 +188,78 @@ The first UIE run downloads model weights. A custom schema must use PaddleNLP's 
 Relations whose subject is `this project`, `the project`, or `project` are grounded directly to the corresponding Award URI. Other extracted terms become Concept entities and are linked to the Award with `kg:mentions`.
 
 Model output is not treated as ground truth. Review evidence and confidence, normalize entities, and evaluate a human-annotated sample before using generated relations downstream.
+
+## Abstract keyword extraction
+
+Keyword extraction links awards through reusable Keyword nodes. This is useful when two awards do not have an explicit extracted relation but share topics such as `digital tutor`, `machine learning`, or `cybersecurity education`.
+
+The generated pattern is:
+
+```text
+award/2541748  kg:hasKeyword  keyword/digital-tutor
+keyword/digital-tutor  rdf:type     kg:Keyword
+keyword/digital-tutor  schema:name  "digital tutor"
+```
+
+The keyword stage removes NSF's repeated statutory-mission boilerplate before scoring candidates, because that sentence appears in many award abstracts and would otherwise create noisy shared keywords.
+
+A dependency-free baseline is available for quick debugging:
+
+```bash
+kg-extract /path/to/Awards.csv \
+  --output-dir output-keywords \
+  --keyword-backend simple \
+  --keyword-top-k 8 \
+  --keyword-ngram-min 1 \
+  --keyword-ngram-max 3
+```
+
+For better semantic keywords, install KeyBERT and run:
+
+```bash
+python3 -m pip install -e '.[keywords]'
+
+kg-extract /path/to/Awards.csv \
+  --output-dir output-keybert \
+  --keyword-backend keybert \
+  --keyword-model sentence-transformers/all-MiniLM-L6-v2 \
+  --keyword-top-k 8 \
+  --keyword-ngram-min 1 \
+  --keyword-ngram-max 3
+```
+
+To merge near-duplicate keyword nodes, add embedding clustering:
+
+```bash
+kg-extract /path/to/Awards.csv \
+  --output-dir output-keybert-clustered \
+  --keyword-backend keybert \
+  --keyword-model sentence-transformers/all-MiniLM-L6-v2 \
+  --keyword-top-k 8 \
+  --keyword-ngram-min 2 \
+  --keyword-ngram-max 3 \
+  --keyword-cluster \
+  --keyword-cluster-threshold 0.82
+```
+
+Keyword normalization performs lowercasing, punctuation removal, stopword filtering,
+basic singularization, common acronym expansion, and slug-based URI generation.
+Embedding clustering runs after this rule-based normalization so labels such as
+`language model` and `large language model` can be mapped to one Keyword node when
+their sentence-transformer embeddings are similar enough.
+
+YAKE is also supported as a lightweight unsupervised backend:
+
+```bash
+python3 -m pip install -e '.[yake]'
+
+kg-extract /path/to/Awards.csv \
+  --output-dir output-yake \
+  --keyword-backend yake \
+  --keyword-top-k 8
+```
+
+`keywords.csv` records `award_number`, raw `keyword`, `canonical_keyword`, `score`, `extractor`, and `evidence`. `keyword_triples.csv` and `keyword_triples.nt` contain only the triples produced by the keyword stage, while `triples.csv` and `triples.nt` include them together with the structured and optional Abstract relation triples.
 
 ## Privacy
 

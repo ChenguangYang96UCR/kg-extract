@@ -15,10 +15,15 @@ dependencies = []
 [project.optional-dependencies]
 kggen = ["kg-gen>=0.4.0"]
 uie = ["paddlepaddle>=2.6.0", "paddlenlp>=2.8.1"]
+keywords = ["keybert", "sentence-transformers"]
+yake = ["yake"]
 all = [
   "kg-gen>=0.4.0",
   "paddlepaddle>=2.6.0",
   "paddlenlp>=2.8.1",
+  "keybert",
+  "sentence-transformers",
+  "yake",
 ]
 
 [project.scripts]
