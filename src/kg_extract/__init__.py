@@ -12,6 +12,7 @@ from .keywords import (
     KeywordAssignment,
     KeywordCandidate,
     KeywordExtractionStats,
+    LLMKeywordBackend,
     extract_keyword_triples,
 )
 
@@ -22,6 +23,7 @@ __all__ = [
     "KeywordAssignment",
     "KeywordCandidate",
     "KeywordExtractionStats",
+    "LLMKeywordBackend",
     "Triple",
     "UIEBackend",
     "extract_abstract_triples",

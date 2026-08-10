@@ -17,6 +17,7 @@ kggen = ["kg-gen>=0.4.0"]
 uie = ["paddlepaddle>=2.6.0", "paddlenlp>=2.8.1"]
 keywords = ["keybert", "sentence-transformers"]
 yake = ["yake"]
+llm = ["accelerate", "torch", "transformers"]
 all = [
   "kg-gen>=0.4.0",
   "paddlepaddle>=2.6.0",
@@ -24,6 +25,9 @@ all = [
   "keybert",
   "sentence-transformers",
   "yake",
+  "accelerate",
+  "torch",
+  "transformers",
 ]
 
 [project.scripts]

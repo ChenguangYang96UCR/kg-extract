@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 import re
 import unicodedata
@@ -382,6 +383,95 @@ class YakeKeywordBackend:
         ]
 
 
+class LLMKeywordBackend:
+    """Local causal-LLM keyword extraction through Hugging Face Transformers."""
+
+    def __init__(
+        self,
+        *,
+        model_path: str | Path = "/data/cyang314/kg",
+        max_new_tokens: int = 256,
+        temperature: float = 0.0,
+        device_map: str = "auto",
+        trust_remote_code: bool = True,
+    ) -> None:
+        self.model_path = str(model_path)
+        self.name = f"llm:{Path(self.model_path).name or self.model_path}"
+        self.max_new_tokens = max_new_tokens
+        self.temperature = temperature
+        try:
+            from transformers import AutoModelForCausalLM, AutoTokenizer
+        except ImportError as exc:
+            raise MissingKeywordDependency(
+                "Transformers is not installed. Run: python3 -m pip install -e '.[llm]'"
+            ) from exc
+
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            self.model_path,
+            local_files_only=True,
+            trust_remote_code=trust_remote_code,
+        )
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_path,
+            device_map=device_map,
+            torch_dtype="auto",
+            local_files_only=True,
+            trust_remote_code=trust_remote_code,
+        )
+
+    def extract(
+        self,
+        text: str,
+        *,
+        top_k: int,
+        ngram_range: tuple[int, int],
+    ) -> list[KeywordCandidate]:
+        prompt = _llm_keyword_prompt(text, top_k=top_k, ngram_range=ngram_range)
+        model_input = self._format_prompt(prompt)
+        inputs = self.tokenizer(model_input, return_tensors="pt")
+        if hasattr(self.model, "device"):
+            inputs = {key: value.to(self.model.device) for key, value in inputs.items()}
+
+        generation_options = {
+            "max_new_tokens": self.max_new_tokens,
+            "do_sample": self.temperature > 0,
+            "pad_token_id": self.tokenizer.eos_token_id,
+        }
+        if self.temperature > 0:
+            generation_options["temperature"] = self.temperature
+
+        output_ids = self.model.generate(**inputs, **generation_options)
+        generated_ids = output_ids[0][inputs["input_ids"].shape[-1] :]
+        response = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+        return _parse_llm_keywords(response, top_k=top_k, text=text)
+
+    def _format_prompt(self, prompt: str) -> str:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You extract concise scientific topic keywords from NSF award "
+                    "abstracts. Return only valid JSON."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ]
+        if hasattr(self.tokenizer, "apply_chat_template"):
+            try:
+                return self.tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            except Exception:
+                pass
+        return (
+            "System: You extract concise scientific topic keywords from NSF award "
+            "abstracts. Return only valid JSON.\n\n"
+            f"User: {prompt}\n\nAssistant:"
+        )
+
+
 class EmbeddingKeywordClusterer:
     """Merge semantically similar keyword labels using sentence embeddings."""
 
@@ -435,6 +525,91 @@ def clean_abstract_for_keywords(text: str) -> str:
     """Remove corpus-level boilerplate that would otherwise become a shared keyword."""
     text = NSF_BOILERPLATE_PATTERN.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _llm_keyword_prompt(
+    text: str,
+    *,
+    top_k: int,
+    ngram_range: tuple[int, int],
+) -> str:
+    min_n, max_n = ngram_range
+    return (
+        f"Extract up to {top_k} scientific topic keywords from the abstract below.\n"
+        f"Each keyword must be a noun phrase of {min_n} to {max_n} words.\n"
+        "Avoid verbs, actions, institution names, person names, grant boilerplate, "
+        "generic words, and duplicates.\n"
+        "Return only a JSON array of strings, for example: "
+        '["quantum sensing", "photonic integrated circuit"].\n\n'
+        f"Abstract:\n{text}"
+    )
+
+
+def _parse_llm_keywords(
+    response: str,
+    *,
+    top_k: int,
+    text: str,
+) -> list[KeywordCandidate]:
+    values = _extract_json_keywords(response)
+    if not values:
+        values = _extract_line_keywords(response)
+
+    keywords: list[KeywordCandidate] = []
+    seen: set[str] = set()
+    for value in values:
+        label = str(value).strip()
+        if not label:
+            continue
+        canonical = canonical_keyword(label)
+        if not canonical or canonical in seen:
+            continue
+        seen.add(canonical)
+        rank = len(keywords)
+        score = max(0.0, 1.0 - rank * 0.01)
+        keywords.append(
+            KeywordCandidate(
+                label=label,
+                score=score,
+                evidence=_find_evidence_sentence(text, label),
+            )
+        )
+        if len(keywords) >= top_k:
+            break
+    return keywords
+
+
+def _extract_json_keywords(response: str) -> list[str]:
+    start = response.find("[")
+    end = response.rfind("]")
+    if start == -1 or end == -1 or end <= start:
+        return []
+    try:
+        parsed = json.loads(response[start : end + 1])
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+
+    values: list[str] = []
+    for item in parsed:
+        if isinstance(item, str):
+            values.append(item)
+        elif isinstance(item, dict):
+            value = item.get("keyword") or item.get("label") or item.get("term")
+            if value:
+                values.append(str(value))
+    return values
+
+
+def _extract_line_keywords(response: str) -> list[str]:
+    values: list[str] = []
+    for line in response.splitlines():
+        line = re.sub(r"^\s*[-*•]?\s*\d*[\.)]?\s*", "", line).strip()
+        line = line.strip("\"'`,; ")
+        if line:
+            values.append(line)
+    return values
 
 
 def canonical_keyword(label: str, *, noun_filter: bool = False) -> str:

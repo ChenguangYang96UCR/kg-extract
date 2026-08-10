@@ -6,6 +6,7 @@ from pathlib import Path
 from kg_extract.keywords import (
     KeywordCandidate,
     SimpleKeywordBackend,
+    _parse_llm_keywords,
     canonical_keyword,
     clean_abstract_for_keywords,
     extract_keyword_triples,
@@ -85,6 +86,18 @@ class KeywordNormalizationTests(unittest.TestCase):
         self.assertTrue(keywords)
         self.assertTrue(all(0.0 <= keyword.score <= 1.0 for keyword in keywords))
         self.assertNotIn("university", {keyword.label for keyword in keywords})
+
+    def test_llm_keyword_parser_reads_json_array(self):
+        keywords = _parse_llm_keywords(
+            '["quantum sensing", "photonic integrated circuit", "quantum sensing"]',
+            top_k=5,
+            text="This project develops quantum sensing with photonic integrated circuits.",
+        )
+        self.assertEqual(
+            [keyword.label for keyword in keywords],
+            ["quantum sensing", "photonic integrated circuit"],
+        )
+        self.assertEqual(keywords[0].score, 1.0)
 
 
 class KeywordTripleTests(unittest.TestCase):

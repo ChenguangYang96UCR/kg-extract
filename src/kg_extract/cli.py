@@ -14,6 +14,7 @@ from .abstracts import (
 from .extractor import DEFAULT_BASE_URI, extract_awards, write_csv, write_ntriples
 from .keywords import (
     KeyBERTKeywordBackend,
+    LLMKeywordBackend,
     MissingKeywordDependency,
     SimpleKeywordBackend,
     YakeKeywordBackend,
@@ -109,7 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--keyword-backend",
-        choices=("none", "simple", "keybert", "yake"),
+        choices=("none", "simple", "keybert", "yake", "llm"),
         default="none",
         help="Optional Abstract keyword extractor (default: none)",
     )
@@ -146,6 +147,28 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=3,
         help="Maximum keyword n-gram length (default: 3)",
+    )
+    parser.add_argument(
+        "--keyword-llm-model-path",
+        default="/data/cyang314/kg",
+        help="Local Hugging Face causal-LM path for --keyword-backend llm",
+    )
+    parser.add_argument(
+        "--keyword-llm-max-new-tokens",
+        type=int,
+        default=256,
+        help="Maximum new tokens for local LLM keyword generation (default: 256)",
+    )
+    parser.add_argument(
+        "--keyword-llm-temperature",
+        type=float,
+        default=0.0,
+        help="Sampling temperature for local LLM keyword generation (default: 0.0)",
+    )
+    parser.add_argument(
+        "--keyword-llm-device-map",
+        default="auto",
+        help="Transformers device_map for local LLM loading (default: auto)",
     )
     parser.add_argument(
         "--keyword-noun-filter",
@@ -291,6 +314,13 @@ def _build_keyword_backend(args: argparse.Namespace):
         return SimpleKeywordBackend()
     if args.keyword_backend == "keybert":
         return KeyBERTKeywordBackend(model=args.keyword_model)
+    if args.keyword_backend == "llm":
+        return LLMKeywordBackend(
+            model_path=args.keyword_llm_model_path,
+            max_new_tokens=args.keyword_llm_max_new_tokens,
+            temperature=args.keyword_llm_temperature,
+            device_map=args.keyword_llm_device_map,
+        )
     return YakeKeywordBackend()
 
 

@@ -288,6 +288,34 @@ kg-extract /path/to/Awards.csv \
   --keyword-top-k 8
 ```
 
+### Local LLM keyword extraction
+
+Local causal language models can be used as another keyword backend. This branch
+only asks the model to propose candidate noun phrases; the shared keyword
+normalization, noun filtering, clustering, and triple generation steps still run
+afterward.
+
+The default local model path is `/data/cyang314/kg`:
+
+```bash
+python3 -m pip install -e '.[llm]'
+
+kg-extract /path/to/Awards.csv \
+  --output-dir output-llm-keywords \
+  --keyword-backend llm \
+  --keyword-llm-model-path /data/cyang314/kg \
+  --keyword-top-k 8 \
+  --keyword-ngram-min 2 \
+  --keyword-ngram-max 3 \
+  --keyword-noun-filter \
+  --keyword-cluster \
+  --keyword-cluster-threshold 0.88
+```
+
+The LLM backend loads model weights with `local_files_only=True`, so the model
+directory must already contain the Hugging Face tokenizer, config, and weight
+files.
+
 `keywords.csv` records `award_number`, raw `keyword`, `canonical_keyword`, `score`, `extractor`, and `evidence`. `keyword_triples.csv` and `keyword_triples.nt` contain only the triples produced by the keyword stage, while `triples.csv` and `triples.nt` include them together with the structured and optional Abstract relation triples.
 
 ## Privacy
