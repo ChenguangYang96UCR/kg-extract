@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run Abstract keyword extraction with a local Hugging Face causal LLM.
+# Run Abstract keyword extraction with a LiteLLM/Ollama chat model.
 #
 # Usage:
 #   bash scripts/run_llm_keywords.sh [input_csv] [output_dir]
@@ -14,13 +14,10 @@ set -euo pipefail
 #
 # Environment overrides:
 #   KG_EXTRACT_BIN             Command used to run kg-extract. Default: kg-extract
-#   LLM_MODEL_PATH             Local model directory. Default: /data/cyang314/kg
-#   LLM_REPO_ID                Hugging Face repo used when model files are missing.
-#   LLM_REVISION               Optional Hugging Face revision, branch, or commit.
-#   LLM_NO_DOWNLOAD            Set to 1 to fail instead of downloading missing model files.
-#   LLM_MAX_NEW_TOKENS         Maximum generated tokens per abstract. Default: 256
-#   LLM_TEMPERATURE            Generation temperature. Default: 0.0
-#   LLM_DEVICE_MAP             Transformers device_map. Default: auto
+#   LITELLM_MODEL              LiteLLM model. Default: ollama_chat/deepseek-r1:14b
+#   LITELLM_API_BASE           Ollama API base. Default: http://localhost:11434
+#   LITELLM_MAX_TOKENS         Maximum generated tokens per abstract. Default: 256
+#   LITELLM_TEMPERATURE        Generation temperature. Default: 0.0
 #   KEYWORD_TOP_K              Maximum keywords per award. Default: 8
 #   KEYWORD_MIN_SCORE          Minimum keyword score. Default: 0.0
 #   KEYWORD_NGRAM_MIN          Minimum n-gram length. Default: 2
@@ -36,11 +33,10 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 INPUT_CSV="${1:-data/llm/filtered/awards_start_2024.csv}"
 
 KG_EXTRACT_BIN="${KG_EXTRACT_BIN:-kg-extract}"
-LLM_MODEL_PATH="${LLM_MODEL_PATH:-/data/cyang314/kg}"
-LLM_REPO_ID="${LLM_REPO_ID:-deepseek-ai/dspark_qwen3_8b_block7}"
-LLM_MAX_NEW_TOKENS="${LLM_MAX_NEW_TOKENS:-256}"
-LLM_TEMPERATURE="${LLM_TEMPERATURE:-0.0}"
-LLM_DEVICE_MAP="${LLM_DEVICE_MAP:-auto}"
+LITELLM_MODEL="${LITELLM_MODEL:-ollama_chat/deepseek-r1:14b}"
+LITELLM_API_BASE="${LITELLM_API_BASE:-http://localhost:11434}"
+LITELLM_MAX_TOKENS="${LITELLM_MAX_TOKENS:-256}"
+LITELLM_TEMPERATURE="${LITELLM_TEMPERATURE:-0.0}"
 KEYWORD_TOP_K="${KEYWORD_TOP_K:-8}"
 KEYWORD_MIN_SCORE="${KEYWORD_MIN_SCORE:-0.0}"
 KEYWORD_NGRAM_MIN="${KEYWORD_NGRAM_MIN:-2}"
@@ -98,26 +94,17 @@ fi
 command_args=(
   "${INPUT_CSV}"
   --output-dir "${OUTPUT_DIR}"
-  --keyword-backend llm
-  --keyword-llm-model-path "${LLM_MODEL_PATH}"
-  --keyword-llm-repo-id "${LLM_REPO_ID}"
-  --keyword-llm-max-new-tokens "${LLM_MAX_NEW_TOKENS}"
-  --keyword-llm-temperature "${LLM_TEMPERATURE}"
-  --keyword-llm-device-map "${LLM_DEVICE_MAP}"
+  --keyword-backend litellm
+  --keyword-litellm-model "${LITELLM_MODEL}"
+  --keyword-litellm-api-base "${LITELLM_API_BASE}"
+  --keyword-litellm-max-tokens "${LITELLM_MAX_TOKENS}"
+  --keyword-litellm-temperature "${LITELLM_TEMPERATURE}"
   --keyword-top-k "${KEYWORD_TOP_K}"
   --keyword-ngram-min "${KEYWORD_NGRAM_MIN}"
   --keyword-ngram-max "${KEYWORD_NGRAM_MAX}"
   --keyword-min-score "${KEYWORD_MIN_SCORE}"
   --keyword-noun-filter
 )
-
-if [[ -n "${LLM_REVISION:-}" ]]; then
-  command_args+=(--keyword-llm-revision "${LLM_REVISION}")
-fi
-
-if [[ "${LLM_NO_DOWNLOAD:-0}" == "1" ]]; then
-  command_args+=(--keyword-llm-no-download)
-fi
 
 if [[ -n "${KEYWORD_LIMIT:-}" ]]; then
   command_args+=(--keyword-limit "${KEYWORD_LIMIT}")
@@ -134,9 +121,9 @@ fi
 echo "Project root: ${PROJECT_ROOT}"
 echo "Input CSV: ${INPUT_CSV}"
 echo "Output directory: ${OUTPUT_DIR}"
-echo "LLM model path: ${LLM_MODEL_PATH}"
-echo "LLM repo id: ${LLM_REPO_ID}"
+echo "LiteLLM model: ${LITELLM_MODEL}"
+echo "LiteLLM API base: ${LITELLM_API_BASE}"
 echo
-echo "Running LLM keyword extraction..."
+echo "Running LiteLLM keyword extraction..."
 
 "${KG_EXTRACT_BIN}" "${command_args[@]}"

@@ -7,7 +7,9 @@ from kg_extract.keywords import (
     KeywordCandidate,
     SimpleKeywordBackend,
     _is_huggingface_model_dir,
+    _looks_like_dspark_draft_repo,
     _parse_llm_keywords,
+    _strip_thinking_blocks,
     canonical_keyword,
     clean_abstract_for_keywords,
     extract_keyword_triples,
@@ -100,6 +102,10 @@ class KeywordNormalizationTests(unittest.TestCase):
         )
         self.assertEqual(keywords[0].score, 1.0)
 
+    def test_strips_reasoning_blocks_before_parsing_litellm_output(self):
+        response = '<think>I should choose terms.</think>\n["quantum sensing"]'
+        self.assertEqual(_strip_thinking_blocks(response), '["quantum sensing"]')
+
     def test_huggingface_model_dir_detection(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
@@ -109,6 +115,10 @@ class KeywordNormalizationTests(unittest.TestCase):
             self.assertFalse(_is_huggingface_model_dir(path))
             (path / "model.safetensors").write_text("", encoding="utf-8")
             self.assertTrue(_is_huggingface_model_dir(path))
+
+    def test_dspark_draft_repo_detection(self):
+        self.assertTrue(_looks_like_dspark_draft_repo("deepseek-ai/dspark_qwen3_8b_block7"))
+        self.assertFalse(_looks_like_dspark_draft_repo("Qwen/Qwen3-8B"))
 
 
 class KeywordTripleTests(unittest.TestCase):

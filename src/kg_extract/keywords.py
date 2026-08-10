@@ -28,8 +28,10 @@ NSF_BOILERPLATE_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 
-DEFAULT_LLM_KEYWORD_MODEL_PATH = "/data/cyang314/kg"
-DEFAULT_LLM_KEYWORD_REPO_ID = "deepseek-ai/dspark_qwen3_8b_block7"
+DEFAULT_LLM_KEYWORD_MODEL_PATH = "/data/cyang314/kg/Qwen3-8B"
+DEFAULT_LLM_KEYWORD_REPO_ID = "Qwen/Qwen3-8B"
+DEFAULT_LITELLM_KEYWORD_MODEL = "ollama_chat/deepseek-r1:14b"
+DEFAULT_LITELLM_API_BASE = "http://localhost:11434"
 
 STOPWORDS = {
     "a",
@@ -463,6 +465,14 @@ class LLMKeywordBackend:
         snapshot_download(**snapshot_options)
 
         if not _is_huggingface_model_dir(model_path):
+            if _looks_like_dspark_draft_repo(repo_id):
+                raise MissingKeywordDependency(
+                    f"{repo_id} was downloaded to {self.model_path}, but it is a "
+                    "DeepSpec/DSpark draft checkpoint rather than a standalone "
+                    "text-generation model. Use the target model instead, for "
+                    "example --keyword-llm-repo-id Qwen/Qwen3-8B "
+                    "--keyword-llm-model-path /data/cyang314/kg/Qwen3-8B."
+                )
             raise MissingKeywordDependency(
                 f"Downloaded files from {repo_id} to {self.model_path}, but the "
                 "directory still does not look like a complete Hugging Face model."
@@ -519,6 +529,59 @@ class LLMKeywordBackend:
             "abstracts. Return only valid JSON.\n\n"
             f"User: {prompt}\n\nAssistant:"
         )
+
+
+class LiteLLMKeywordBackend:
+    """Keyword extraction through LiteLLM-compatible chat providers."""
+
+    def __init__(
+        self,
+        *,
+        model: str = DEFAULT_LITELLM_KEYWORD_MODEL,
+        api_base: str | None = DEFAULT_LITELLM_API_BASE,
+        temperature: float = 0.0,
+        max_tokens: int = 256,
+    ) -> None:
+        self.name = f"litellm:{model}"
+        self.model = model
+        self.api_base = api_base or None
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        try:
+            from litellm import completion
+        except ImportError as exc:
+            raise MissingKeywordDependency(
+                "LiteLLM is not installed. Run: python3 -m pip install -e '.[litellm]'"
+            ) from exc
+        self.completion = completion
+
+    def extract(
+        self,
+        text: str,
+        *,
+        top_k: int,
+        ngram_range: tuple[int, int],
+    ) -> list[KeywordCandidate]:
+        prompt = _llm_keyword_prompt(text, top_k=top_k, ngram_range=ngram_range)
+        response = self.completion(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You extract concise scientific topic keywords from NSF "
+                        "award abstracts. Return only valid JSON."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            api_base=self.api_base,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+        content = response.choices[0].message.content or ""
+        content = _strip_thinking_blocks(content)
+        return _parse_llm_keywords(content, top_k=top_k, text=text)
 
 
 class EmbeddingKeywordClusterer:
@@ -661,6 +724,10 @@ def _extract_line_keywords(response: str) -> list[str]:
     return values
 
 
+def _strip_thinking_blocks(response: str) -> str:
+    return re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL | re.IGNORECASE).strip()
+
+
 def _is_huggingface_model_dir(path: str | Path) -> bool:
     path = Path(path)
     if not path.is_dir():
@@ -679,6 +746,11 @@ def _is_huggingface_model_dir(path: str | Path) -> bool:
         any(path.glob(pattern)) for pattern in _MODEL_WEIGHT_PATTERNS
     )
     return has_config and has_tokenizer and has_weights
+
+
+def _looks_like_dspark_draft_repo(repo_id: str) -> bool:
+    normalized = repo_id.casefold()
+    return "dspark_" in normalized or "/dspark" in normalized
 
 
 _MODEL_WEIGHT_PATTERNS = (

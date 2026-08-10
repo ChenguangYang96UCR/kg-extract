@@ -15,8 +15,11 @@ from .extractor import DEFAULT_BASE_URI, extract_awards, write_csv, write_ntripl
 from .keywords import (
     DEFAULT_LLM_KEYWORD_MODEL_PATH,
     DEFAULT_LLM_KEYWORD_REPO_ID,
+    DEFAULT_LITELLM_API_BASE,
+    DEFAULT_LITELLM_KEYWORD_MODEL,
     KeyBERTKeywordBackend,
     LLMKeywordBackend,
+    LiteLLMKeywordBackend,
     MissingKeywordDependency,
     SimpleKeywordBackend,
     YakeKeywordBackend,
@@ -112,7 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--keyword-backend",
-        choices=("none", "simple", "keybert", "yake", "llm"),
+        choices=("none", "simple", "keybert", "yake", "llm", "litellm"),
         default="none",
         help="Optional Abstract keyword extractor (default: none)",
     )
@@ -188,6 +191,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--keyword-llm-device-map",
         default="auto",
         help="Transformers device_map for local LLM loading (default: auto)",
+    )
+    parser.add_argument(
+        "--keyword-litellm-model",
+        default=DEFAULT_LITELLM_KEYWORD_MODEL,
+        help=f"LiteLLM model for --keyword-backend litellm (default: {DEFAULT_LITELLM_KEYWORD_MODEL})",
+    )
+    parser.add_argument(
+        "--keyword-litellm-api-base",
+        default=DEFAULT_LITELLM_API_BASE,
+        help=f"LiteLLM API base URL (default: {DEFAULT_LITELLM_API_BASE})",
+    )
+    parser.add_argument(
+        "--keyword-litellm-max-tokens",
+        type=int,
+        default=256,
+        help="Maximum generated tokens for LiteLLM keyword extraction (default: 256)",
+    )
+    parser.add_argument(
+        "--keyword-litellm-temperature",
+        type=float,
+        default=0.0,
+        help="Sampling temperature for LiteLLM keyword extraction (default: 0.0)",
     )
     parser.add_argument(
         "--keyword-noun-filter",
@@ -342,6 +367,13 @@ def _build_keyword_backend(args: argparse.Namespace):
             max_new_tokens=args.keyword_llm_max_new_tokens,
             temperature=args.keyword_llm_temperature,
             device_map=args.keyword_llm_device_map,
+        )
+    if args.keyword_backend == "litellm":
+        return LiteLLMKeywordBackend(
+            model=args.keyword_litellm_model,
+            api_base=args.keyword_litellm_api_base,
+            temperature=args.keyword_litellm_temperature,
+            max_tokens=args.keyword_litellm_max_tokens,
         )
     return YakeKeywordBackend()
 

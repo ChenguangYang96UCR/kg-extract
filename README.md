@@ -295,7 +295,7 @@ only asks the model to propose candidate noun phrases; the shared keyword
 normalization, noun filtering, clustering, and triple generation steps still run
 afterward.
 
-The default local model path is `/data/cyang314/kg`:
+The default local model path is `/data/cyang314/kg/Qwen3-8B`:
 
 ```bash
 python3 -m pip install -e '.[llm]'
@@ -303,7 +303,8 @@ python3 -m pip install -e '.[llm]'
 kg-extract /path/to/Awards.csv \
   --output-dir output-llm-keywords \
   --keyword-backend llm \
-  --keyword-llm-model-path /data/cyang314/kg \
+  --keyword-llm-model-path /data/cyang314/kg/Qwen3-8B \
+  --keyword-llm-repo-id Qwen/Qwen3-8B \
   --keyword-top-k 8 \
   --keyword-ngram-min 2 \
   --keyword-ngram-max 3 \
@@ -314,9 +315,43 @@ kg-extract /path/to/Awards.csv \
 
 The LLM backend loads model weights with `local_files_only=True`, so the model
 is always loaded from the local directory. If the directory is missing or
-incomplete, the backend first downloads
-`deepseek-ai/dspark_qwen3_8b_block7` from Hugging Face into that directory. Use
-`--keyword-llm-no-download` to require a fully offline local load.
+incomplete, the backend first downloads `Qwen/Qwen3-8B` from Hugging Face into
+that directory. Use `--keyword-llm-no-download` to require a fully offline local
+load.
+
+Do not use `deepseek-ai/dspark_qwen3_8b_block7` as the standalone keyword LLM.
+That repository is a DeepSpec/DSpark draft checkpoint for speculative decoding
+and does not include the tokenizer or full target model needed for direct text
+generation. Use the target model, such as `Qwen/Qwen3-8B`, for this backend.
+
+### Ollama / LiteLLM keyword extraction
+
+Ollama models can be used through LiteLLM. Start Ollama and pull the model first:
+
+```bash
+ollama pull deepseek-r1:14b
+```
+
+Then run:
+
+```bash
+python3 -m pip install -e '.[litellm]'
+
+kg-extract /path/to/Awards.csv \
+  --output-dir output-ollama-keywords \
+  --keyword-backend litellm \
+  --keyword-litellm-model ollama_chat/deepseek-r1:14b \
+  --keyword-litellm-api-base http://localhost:11434 \
+  --keyword-top-k 8 \
+  --keyword-ngram-min 2 \
+  --keyword-ngram-max 3 \
+  --keyword-noun-filter \
+  --keyword-cluster \
+  --keyword-cluster-threshold 0.88
+```
+
+The helper script [scripts/run_llm_keywords.sh](scripts/run_llm_keywords.sh)
+uses this Ollama/LiteLLM backend by default.
 
 `keywords.csv` records `award_number`, raw `keyword`, `canonical_keyword`, `score`, `extractor`, and `evidence`. `keyword_triples.csv` and `keyword_triples.nt` contain only the triples produced by the keyword stage, while `triples.csv` and `triples.nt` include them together with the structured and optional Abstract relation triples.
 
