@@ -20,8 +20,8 @@ set -euo pipefail
 #   LITELLM_TEMPERATURE        Generation temperature. Default: 0.0
 #   KEYWORD_TOP_K              Maximum keywords per award. Default: 8
 #   KEYWORD_MIN_SCORE          Minimum keyword score. Default: 0.0
-#   KEYWORD_NGRAM_MIN          Minimum n-gram length. Default: 2
-#   KEYWORD_NGRAM_MAX          Maximum n-gram length. Default: 3
+#   KEYWORD_NGRAM_MIN          Minimum n-gram length. Default: 1
+#   KEYWORD_NGRAM_MAX          Maximum n-gram length. Default: 2
 #   KEYWORD_LIMIT              Optional number of abstracts to process.
 #   KEYWORD_CLUSTER            Set to 0 to disable embedding clustering. Default: 1
 #   KEYWORD_CLUSTER_MODEL      Embedding model for clustering.
@@ -39,8 +39,8 @@ LITELLM_MAX_TOKENS="${LITELLM_MAX_TOKENS:-256}"
 LITELLM_TEMPERATURE="${LITELLM_TEMPERATURE:-0.0}"
 KEYWORD_TOP_K="${KEYWORD_TOP_K:-8}"
 KEYWORD_MIN_SCORE="${KEYWORD_MIN_SCORE:-0.0}"
-KEYWORD_NGRAM_MIN="${KEYWORD_NGRAM_MIN:-2}"
-KEYWORD_NGRAM_MAX="${KEYWORD_NGRAM_MAX:-3}"
+KEYWORD_NGRAM_MIN="${KEYWORD_NGRAM_MIN:-1}"
+KEYWORD_NGRAM_MAX="${KEYWORD_NGRAM_MAX:-2}"
 KEYWORD_CLUSTER="${KEYWORD_CLUSTER:-1}"
 KEYWORD_CLUSTER_MODEL="${KEYWORD_CLUSTER_MODEL:-sentence-transformers/all-MiniLM-L6-v2}"
 KEYWORD_CLUSTER_THRESHOLD="${KEYWORD_CLUSTER_THRESHOLD:-0.88}"

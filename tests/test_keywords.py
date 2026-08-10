@@ -8,6 +8,7 @@ from kg_extract.keywords import (
     SimpleKeywordBackend,
     _is_huggingface_model_dir,
     _looks_like_dspark_draft_repo,
+    _llm_keyword_prompt,
     _parse_llm_keywords,
     _strip_thinking_blocks,
     canonical_keyword,
@@ -105,6 +106,16 @@ class KeywordNormalizationTests(unittest.TestCase):
     def test_strips_reasoning_blocks_before_parsing_litellm_output(self):
         response = '<think>I should choose terms.</think>\n["quantum sensing"]'
         self.assertEqual(_strip_thinking_blocks(response), '["quantum sensing"]')
+
+    def test_llm_prompt_restricts_short_noun_topics(self):
+        prompt = _llm_keyword_prompt(
+            "This project develops privacy-preserving digital twins.",
+            top_k=3,
+            ngram_range=(1, 2),
+        )
+        self.assertIn("1 to 2 words", prompt)
+        self.assertIn("short noun topic", prompt)
+        self.assertIn("Do not return verbs", prompt)
 
     def test_huggingface_model_dir_detection(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -648,11 +648,16 @@ def _llm_keyword_prompt(
     min_n, max_n = ngram_range
     return (
         f"Extract up to {top_k} scientific topic keywords from the abstract below.\n"
-        f"Each keyword must be a noun phrase of {min_n} to {max_n} words.\n"
-        "Avoid verbs, actions, institution names, person names, grant boilerplate, "
-        "generic words, and duplicates.\n"
+        f"Each keyword must be a short noun topic of {min_n} to {max_n} words.\n"
+        "Prefer compact domain concepts over full phrases. Use singular nouns when possible.\n"
+        "Do not return verbs, verb phrases, actions, complete clauses, institution names, "
+        "person names, grant boilerplate, generic words, or duplicates.\n"
+        "Bad examples: \"develop\", \"improving systems\", \"students learn\", "
+        "\"using sensors\".\n"
+        "Good examples: \"quantum sensing\", \"digital twin\", \"robotics\", "
+        "\"privacy\".\n"
         "Return only a JSON array of strings, for example: "
-        '["quantum sensing", "photonic integrated circuit"].\n\n'
+        '["quantum sensing", "digital twin"].\n\n'
         f"Abstract:\n{text}"
     )
 
