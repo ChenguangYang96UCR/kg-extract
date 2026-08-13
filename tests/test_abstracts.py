@@ -8,6 +8,7 @@ from kg_extract.abstracts import (
     KGGenBackend,
     UIEBackend,
     extract_abstract_triples,
+    preprocess_abstract_for_kggen,
 )
 
 
@@ -115,6 +116,30 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(len(relations), 2)
         self.assertEqual(relations[0].evidence, "Source text")
         self.assertEqual(client.calls[0]["context"], "Award title")
+
+    def test_kggen_preprocesses_abstract_before_generation(self):
+        client = FakeKGGenClient()
+        backend = KGGenBackend(client=client, model="test/model")
+        source = (
+            "This project develops a safety-aware framework.\n\n"
+            "This award reflects NSF's statutory mission and has been deemed worthy "
+            "of support through evaluation using the Foundation's intellectual merit "
+            "and broader impacts review criteria.\n\n"
+            "It targets healthcare."
+        )
+        backend.extract(source)
+
+        generated_text = client.calls[0]["input_data"]
+        self.assertIn("safety-aware framework", generated_text)
+        self.assertIn("It targets healthcare.", generated_text)
+        self.assertNotIn("statutory mission", generated_text)
+
+    def test_kggen_preprocessing_preserves_case_and_punctuation(self):
+        text = "AI-enabled robots improve STEM learning.\n\nThey use sensors."
+        self.assertEqual(
+            preprocess_abstract_for_kggen(text),
+            "AI-enabled robots improve STEM learning. They use sensors.",
+        )
 
     def test_kggen_disables_modern_deduplication_when_cluster_is_false(self):
         client = FakeModernKGGenClient()

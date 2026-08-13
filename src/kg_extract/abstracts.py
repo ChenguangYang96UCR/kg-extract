@@ -34,6 +34,16 @@ DEFAULT_UIE_SCHEMA: list[dict[str, list[str]]] = [
     }
 ]
 
+KGGEN_BOILERPLATE_PATTERNS = [
+    re.compile(
+        r"This\s+award\s+reflects\s+NSF's\s+statutory\s+mission\s+and\s+has\s+been\s+"
+        r"deemed\s+worthy\s+of\s+support\s+through\s+evaluation\s+using\s+the\s+"
+        r"Foundation's\s+intellectual\s+merit\s+and\s+broader\s+impacts\s+review\s+"
+        r"criteria\.?",
+        flags=re.IGNORECASE,
+    ),
+]
+
 
 class MissingBackendDependency(RuntimeError):
     """Raised when an optional abstract extraction backend is not installed."""
@@ -96,8 +106,11 @@ class KGGenBackend:
         self.client = KGGen(**options)
 
     def extract(self, text: str, *, context: str = "") -> list[AbstractRelation]:
+        processed_text = preprocess_abstract_for_kggen(text)
+        if not processed_text:
+            return []
         generate_options: dict[str, Any] = {
-            "input_data": text,
+            "input_data": processed_text,
             "context": context or "",
             "chunk_size": self.chunk_size,
         }
@@ -115,9 +128,19 @@ class KGGenBackend:
             subject, predicate, obj = (str(value).strip() for value in relation)
             if subject and predicate and obj:
                 relations.append(
-                    AbstractRelation(subject, predicate, obj, evidence=text)
+                    AbstractRelation(subject, predicate, obj, evidence=processed_text)
                 )
         return relations
+
+
+def preprocess_abstract_for_kggen(text: str) -> str:
+    """Clean Abstract text before KGGen while preserving relation-bearing syntax."""
+    cleaned = text.replace("\ufeff", " ").replace("\u00a0", " ")
+    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]+", " ", cleaned)
+    for pattern in KGGEN_BOILERPLATE_PATTERNS:
+        cleaned = pattern.sub(" ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
 
 
 class UIEBackend:
