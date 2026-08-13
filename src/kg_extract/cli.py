@@ -5,12 +5,16 @@ import os
 from pathlib import Path
 
 from .abstracts import (
+    DEFAULT_ABSTRACT_NODE_CLEANER_API_BASE,
+    DEFAULT_ABSTRACT_NODE_CLEANER_MODEL,
     KGGenBackend,
+    LLMAbstractNodeCleaner,
     MissingBackendDependency,
     UIEBackend,
     api_key_from_environment,
     extract_abstract_triples,
     load_uie_schema,
+    write_abstract_node_cleaning_csv,
 )
 from .extractor import DEFAULT_BASE_URI, extract_awards, write_csv, write_ntriples
 from .keywords import (
@@ -117,6 +121,44 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=256,
         help="Maximum UIE input chunk size in characters (default: 256)",
+    )
+    parser.add_argument(
+        "--abstract-node-cleaner",
+        choices=("none", "llm"),
+        default="none",
+        help="Optional semantic cleaner for Abstract subject/object node labels (default: none)",
+    )
+    parser.add_argument(
+        "--abstract-node-cleaner-model",
+        default=DEFAULT_ABSTRACT_NODE_CLEANER_MODEL,
+        help=(
+            "LiteLLM model for --abstract-node-cleaner llm "
+            f"(default: {DEFAULT_ABSTRACT_NODE_CLEANER_MODEL})"
+        ),
+    )
+    parser.add_argument(
+        "--abstract-node-cleaner-api-base",
+        default=DEFAULT_ABSTRACT_NODE_CLEANER_API_BASE,
+        help=(
+            "LiteLLM API base URL for --abstract-node-cleaner llm "
+            f"(default: {DEFAULT_ABSTRACT_NODE_CLEANER_API_BASE})"
+        ),
+    )
+    parser.add_argument(
+        "--abstract-node-cleaner-api-key-env",
+        help="Environment variable containing the node cleaner provider API key",
+    )
+    parser.add_argument(
+        "--abstract-node-cleaner-max-tokens",
+        type=int,
+        default=1024,
+        help="Maximum generated tokens for Abstract node cleaning (default: 1024)",
+    )
+    parser.add_argument(
+        "--abstract-node-cleaner-temperature",
+        type=float,
+        default=0.0,
+        help="Sampling temperature for Abstract node cleaning (default: 0.0)",
     )
     parser.add_argument(
         "--keyword-backend",
@@ -291,18 +333,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     abstract_stats = None
     abstract_triples = []
+    abstract_node_cleaner = None
     keyword_stats = None
     keyword_triples = []
     keyword_assignments = []
     if args.abstract_backend != "none":
         try:
             backend = _build_abstract_backend(args)
+            abstract_node_cleaner = _build_abstract_node_cleaner(args)
             abstract_triples, abstract_stats = extract_abstract_triples(
                 args.input_csv,
                 backend,
                 base_uri=base_uri,
                 limit=args.abstract_limit,
                 min_confidence=args.min_confidence,
+                node_cleaner=abstract_node_cleaner,
             )
         except (MissingBackendDependency, ValueError) as exc:
             raise SystemExit(str(exc)) from exc
@@ -344,6 +389,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.format in {"nt", "both"}:
             path = args.output_dir / "abstract_triples.nt"
             write_ntriples(abstract_triples, path)
+            written.append(path)
+        if abstract_node_cleaner is not None and abstract_node_cleaner.records:
+            path = args.output_dir / "abstract_node_cleaning.csv"
+            write_abstract_node_cleaning_csv(abstract_node_cleaner.records, path)
             written.append(path)
     if keyword_stats:
         path = args.output_dir / "keywords.csv"
@@ -390,6 +439,18 @@ def _build_abstract_backend(args: argparse.Namespace):
         model=args.abstract_model or "uie-base-en",
         schema=load_uie_schema(args.uie_schema),
         chunk_size=args.uie_chunk_size,
+    )
+
+
+def _build_abstract_node_cleaner(args: argparse.Namespace):
+    if args.abstract_node_cleaner == "none":
+        return None
+    return LLMAbstractNodeCleaner(
+        model=args.abstract_node_cleaner_model,
+        api_base=args.abstract_node_cleaner_api_base,
+        api_key=api_key_from_environment(args.abstract_node_cleaner_api_key_env),
+        temperature=args.abstract_node_cleaner_temperature,
+        max_tokens=args.abstract_node_cleaner_max_tokens,
     )
 
 

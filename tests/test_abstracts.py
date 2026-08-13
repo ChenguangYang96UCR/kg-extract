@@ -5,10 +5,13 @@ from pathlib import Path
 
 from kg_extract.abstracts import (
     AbstractRelation,
+    AbstractNodeCleaningDecision,
+    AbstractNodeCleaningRecord,
     KGGenBackend,
     UIEBackend,
     extract_abstract_triples,
     preprocess_abstract_for_kggen,
+    write_abstract_node_cleaning_csv,
 )
 
 
@@ -131,6 +134,67 @@ class FakeLongNodeBackend:
                 "provide valuable insights into",
                 "human-AI dynamics in education",
                 confidence=0.6,
+            ),
+        ]
+
+
+class FakeSemanticNodeCleaner:
+    name = "fake:semantic-node-cleaner"
+
+    def __init__(self):
+        self.records = []
+
+    def clean_labels(self, labels, *, award_number, title, abstract):
+        del title, abstract
+        decisions = {}
+        for label in labels:
+            if label in {"novelty", "goals"}:
+                decision = AbstractNodeCleaningDecision(
+                    raw_label=label,
+                    action="drop",
+                    clean_labels=(),
+                    reason="Too generic to characterize the award.",
+                )
+            elif label == "controlled space for practical training":
+                decision = AbstractNodeCleaningDecision(
+                    raw_label=label,
+                    action="rewrite",
+                    clean_labels=("practical training environment",),
+                    reason="More concise award-specific concept.",
+                )
+            else:
+                decision = AbstractNodeCleaningDecision(
+                    raw_label=label,
+                    action="keep",
+                    clean_labels=(label,),
+                    reason="Meaningful label.",
+                )
+            decisions[label] = decision
+            self.records.append(
+                AbstractNodeCleaningRecord(
+                    award_number=award_number,
+                    raw_label=label,
+                    action=decision.action,
+                    clean_labels="|".join(decision.clean_labels),
+                    reason=decision.reason,
+                    cleaner=self.name,
+                )
+            )
+        return decisions
+
+
+class FakeNoisyNodeBackend:
+    name = "fake:noisy-node"
+
+    def extract(self, text, *, context=""):
+        del text, context
+        return [
+            AbstractRelation("This project", "has", "novelty"),
+            AbstractRelation("This project", "has", "goals"),
+            AbstractRelation(
+                "This project",
+                "creates",
+                "controlled space for practical training",
             ),
         ]
 
@@ -306,6 +370,61 @@ class AbstractTripleTests(unittest.TestCase):
             if triple.predicate.endswith("/provide-valuable-insights-into")
         )
         self.assertEqual(insight_relation.subject, "https://example.org/nsf/award/42")
+
+    def test_semantic_node_cleaner_drops_and_rewrites_noisy_nodes(self):
+        cleaner = FakeSemanticNodeCleaner()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "awards.csv"
+            with path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle, fieldnames=["AwardNumber", "Title", "Abstract"]
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "AwardNumber": "42",
+                        "Title": "Semantic Cleaner Award",
+                        "Abstract": "This project creates a practical training environment.",
+                    }
+                )
+
+            triples, stats = extract_abstract_triples(
+                path,
+                FakeNoisyNodeBackend(),
+                node_cleaner=cleaner,
+            )
+
+        concept_names = {
+            triple.object
+            for triple in triples
+            if triple.predicate == "https://schema.org/name"
+        }
+        self.assertNotIn("novelty", concept_names)
+        self.assertNotIn("goals", concept_names)
+        self.assertIn("practical training environment", concept_names)
+        self.assertEqual(stats.relations, 1)
+        self.assertTrue(cleaner.records)
+
+    def test_writes_abstract_node_cleaning_debug_csv(self):
+        records = [
+            AbstractNodeCleaningRecord(
+                award_number="42",
+                raw_label="novelty",
+                action="drop",
+                clean_labels="",
+                reason="Too generic.",
+                cleaner="fake",
+            )
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            output_path = Path(directory) / "abstract_node_cleaning.csv"
+            write_abstract_node_cleaning_csv(records, output_path)
+
+            with output_path.open("r", encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+
+        self.assertEqual(rows[0]["raw_label"], "novelty")
+        self.assertEqual(rows[0]["action"], "drop")
 
 
 if __name__ == "__main__":

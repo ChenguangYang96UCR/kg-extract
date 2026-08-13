@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from numbers import Real
 from pathlib import Path
-from typing import Any, Protocol, Sequence
+from typing import Any, Iterable, Protocol, Sequence
 
 from .extractor import (
     DEFAULT_BASE_URI,
@@ -33,6 +33,9 @@ DEFAULT_UIE_SCHEMA: list[dict[str, list[str]]] = [
         ]
     }
 ]
+
+DEFAULT_ABSTRACT_NODE_CLEANER_MODEL = "ollama_chat/deepseek-r1:14b"
+DEFAULT_ABSTRACT_NODE_CLEANER_API_BASE = "http://localhost:11434"
 
 KGGEN_BOILERPLATE_PATTERNS = [
     re.compile(
@@ -82,10 +85,42 @@ class AbstractExtractionStats:
     triples: int
 
 
+@dataclass(frozen=True, slots=True)
+class AbstractNodeCleaningDecision:
+    raw_label: str
+    action: str
+    clean_labels: tuple[str, ...]
+    reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AbstractNodeCleaningRecord:
+    award_number: str
+    raw_label: str
+    action: str
+    clean_labels: str
+    reason: str
+    cleaner: str
+
+
 class AbstractBackend(Protocol):
     name: str
 
     def extract(self, text: str, *, context: str = "") -> Sequence[AbstractRelation]: ...
+
+
+class AbstractNodeCleaner(Protocol):
+    name: str
+    records: list[AbstractNodeCleaningRecord]
+
+    def clean_labels(
+        self,
+        labels: Sequence[str],
+        *,
+        award_number: str,
+        title: str,
+        abstract: str,
+    ) -> dict[str, AbstractNodeCleaningDecision]: ...
 
 
 class KGGenBackend:
@@ -148,6 +183,108 @@ class KGGenBackend:
                     AbstractRelation(subject, predicate, obj, evidence=processed_text)
                 )
         return relations
+
+
+class LLMAbstractNodeCleaner:
+    """Semantic node cleaning through a LiteLLM-compatible chat model."""
+
+    def __init__(
+        self,
+        *,
+        model: str = DEFAULT_ABSTRACT_NODE_CLEANER_MODEL,
+        api_base: str | None = DEFAULT_ABSTRACT_NODE_CLEANER_API_BASE,
+        api_key: str | None = None,
+        temperature: float = 0.0,
+        max_tokens: int = 1024,
+    ) -> None:
+        self.name = f"llm-node-cleaner:{model}"
+        self.model = model
+        self.api_base = api_base or None
+        self.api_key = api_key
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.records: list[AbstractNodeCleaningRecord] = []
+        self._cache: dict[tuple[str, str, str], AbstractNodeCleaningDecision] = {}
+        try:
+            from litellm import completion
+        except ImportError as exc:
+            raise MissingBackendDependency(
+                "LiteLLM is not installed. Run: python3 -m pip install -e '.[litellm]'"
+            ) from exc
+        self.completion = completion
+
+    def clean_labels(
+        self,
+        labels: Sequence[str],
+        *,
+        award_number: str,
+        title: str,
+        abstract: str,
+    ) -> dict[str, AbstractNodeCleaningDecision]:
+        unique_labels = _unique_clean_labels(labels)
+        if not unique_labels:
+            return {}
+
+        cache_key_prefix = (title, _abstract_context_fingerprint(abstract))
+        decisions: dict[str, AbstractNodeCleaningDecision] = {}
+        missing: list[str] = []
+        for label in unique_labels:
+            key = (*cache_key_prefix, label)
+            if key in self._cache:
+                decisions[label] = self._cache[key]
+            else:
+                missing.append(label)
+
+        if missing:
+            response = self.completion(**self._request_options(missing, title=title, abstract=abstract))
+            content = response.choices[0].message.content or ""
+            content = _strip_thinking_blocks(content)
+            parsed = _parse_node_cleaning_response(content, missing)
+            for label in missing:
+                decision = parsed.get(label) or AbstractNodeCleaningDecision(
+                    raw_label=label,
+                    action="keep",
+                    clean_labels=(label,),
+                    reason="LLM response did not include this label; kept original label.",
+                )
+                self._cache[(*cache_key_prefix, label)] = decision
+                decisions[label] = decision
+
+        for label in unique_labels:
+            decision = decisions[label]
+            self.records.append(
+                AbstractNodeCleaningRecord(
+                    award_number=award_number,
+                    raw_label=label,
+                    action=decision.action,
+                    clean_labels="|".join(decision.clean_labels),
+                    reason=decision.reason,
+                    cleaner=self.name,
+                )
+            )
+        return decisions
+
+    def _request_options(self, labels: Sequence[str], *, title: str, abstract: str) -> dict[str, Any]:
+        prompt = _node_cleaning_prompt(labels, title=title, abstract=abstract)
+        options: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You clean noisy knowledge-graph node labels extracted from NSF "
+                        "award abstracts. Return only valid JSON."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "api_base": self.api_base,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+        if self.api_key:
+            options["api_key"] = self.api_key
+        return options
 
 
 def preprocess_abstract_for_kggen(text: str) -> str:
@@ -318,6 +455,7 @@ def extract_abstract_triples(
     base_uri: str = DEFAULT_BASE_URI,
     limit: int | None = None,
     min_confidence: float = 0.0,
+    node_cleaner: AbstractNodeCleaner | None = None,
 ) -> tuple[list[Triple], AbstractExtractionStats]:
     triples: list[Triple] = []
     processed = 0
@@ -335,8 +473,19 @@ def extract_abstract_triples(
             processed += 1
             award_uri = f"{base_uri}award/{number}"
             context = clean_excel_literal(row.get("Title"))
-            for raw_relation in backend.extract(text, context=context):
-                for relation in _postprocess_abstract_relation(raw_relation):
+            raw_relations = list(backend.extract(text, context=context))
+            node_decisions = _clean_relation_node_labels(
+                raw_relations,
+                node_cleaner=node_cleaner,
+                award_number=number,
+                title=context,
+                abstract=text,
+            )
+            for raw_relation in raw_relations:
+                for relation in _postprocess_abstract_relation(
+                    raw_relation,
+                    node_decisions=node_decisions,
+                ):
                     if relation.confidence is not None and relation.confidence < min_confidence:
                         continue
                     relation_count += 1
@@ -391,9 +540,38 @@ def extract_abstract_triples(
     return triples, AbstractExtractionStats(processed, relation_count, len(triples))
 
 
-def _postprocess_abstract_relation(relation: AbstractRelation) -> list[AbstractRelation]:
-    subjects = _postprocess_abstract_node_label(relation.subject)
-    objects = _postprocess_abstract_node_label(relation.object)
+def _clean_relation_node_labels(
+    relations: Sequence[AbstractRelation],
+    *,
+    node_cleaner: AbstractNodeCleaner | None,
+    award_number: str,
+    title: str,
+    abstract: str,
+) -> dict[str, AbstractNodeCleaningDecision]:
+    if node_cleaner is None:
+        return {}
+    labels = [label for relation in relations for label in (relation.subject, relation.object)]
+    return node_cleaner.clean_labels(
+        labels,
+        award_number=award_number,
+        title=title,
+        abstract=abstract,
+    )
+
+
+def _postprocess_abstract_relation(
+    relation: AbstractRelation,
+    *,
+    node_decisions: dict[str, AbstractNodeCleaningDecision] | None = None,
+) -> list[AbstractRelation]:
+    subjects = _postprocess_abstract_node_label(
+        relation.subject,
+        node_decisions=node_decisions,
+    )
+    objects = _postprocess_abstract_node_label(
+        relation.object,
+        node_decisions=node_decisions,
+    )
     if not subjects or not objects:
         return []
 
@@ -419,7 +597,31 @@ def _postprocess_abstract_relation(relation: AbstractRelation) -> list[AbstractR
     return processed
 
 
-def _postprocess_abstract_node_label(label: str) -> list[str]:
+def _postprocess_abstract_node_label(
+    label: str,
+    *,
+    node_decisions: dict[str, AbstractNodeCleaningDecision] | None = None,
+) -> list[str]:
+    decision = (node_decisions or {}).get(label)
+    if decision and decision.action == "drop":
+        return []
+    source_labels = list(decision.clean_labels) if decision and decision.clean_labels else [label]
+
+    labels: list[str] = []
+    seen: set[str] = set()
+    for source_label in source_labels:
+        for processed_label in _postprocess_single_abstract_node_label(source_label):
+            key = processed_label.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            labels.append(processed_label)
+            if len(labels) >= ABSTRACT_NODE_MAX_EXPANSIONS:
+                return labels
+    return labels
+
+
+def _postprocess_single_abstract_node_label(label: str) -> list[str]:
     cleaned = _clean_abstract_node_label(label)
     if not cleaned:
         return []
@@ -447,6 +649,136 @@ def _postprocess_abstract_node_label(label: str) -> list[str]:
             if len(labels) >= ABSTRACT_NODE_MAX_EXPANSIONS:
                 return labels
     return labels
+
+
+def _node_cleaning_prompt(labels: Sequence[str], *, title: str, abstract: str) -> str:
+    labels_json = json.dumps(list(labels), ensure_ascii=False, indent=2)
+    return (
+        "Clean the node labels below for a knowledge graph about one NSF award.\n"
+        "For each raw label, decide whether it should be kept, dropped, rewritten, or split.\n"
+        "\n"
+        "Goal: keep labels that describe award-specific technologies, methods, resources, "
+        "domains, organizations, datasets, systems, educational interventions, outcomes, "
+        "or concrete scientific concepts.\n"
+        "\n"
+        "Drop labels that are too generic, rhetorical, administrative, incomplete, "
+        "or do not help characterize this award. Rewrite verbose labels into concise "
+        "noun phrases. Split labels only when the raw label contains multiple meaningful "
+        "concepts.\n"
+        "\n"
+        "Return only a JSON array. Each item must have exactly these fields:\n"
+        "- raw_label: one original label from the input list\n"
+        "- action: one of keep, drop, rewrite, split\n"
+        "- labels: [] for drop, otherwise one or more concise cleaned labels\n"
+        "- reason: short explanation\n"
+        "\n"
+        f"Award title:\n{title or '(missing)'}\n\n"
+        f"Abstract:\n{abstract[:3500]}\n\n"
+        f"Raw labels:\n{labels_json}"
+    )
+
+
+def _parse_node_cleaning_response(
+    response: str,
+    expected_labels: Sequence[str],
+) -> dict[str, AbstractNodeCleaningDecision]:
+    expected = {label: label for label in expected_labels}
+    expected_casefold = {label.casefold(): label for label in expected_labels}
+    data = _extract_json_value(response)
+    if isinstance(data, dict):
+        items = data.get("labels", data.get("decisions", []))
+    else:
+        items = data
+    if not isinstance(items, list):
+        return {}
+
+    decisions: dict[str, AbstractNodeCleaningDecision] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw_label = str(item.get("raw_label", "")).strip()
+        if raw_label not in expected:
+            raw_label = expected_casefold.get(raw_label.casefold(), "")
+        if not raw_label:
+            continue
+        action = str(item.get("action", "keep")).strip().casefold()
+        if action not in {"keep", "drop", "rewrite", "split"}:
+            action = "keep"
+        clean_labels = _coerce_clean_labels(item.get("labels"))
+        if action == "drop":
+            clean_labels = ()
+        elif not clean_labels:
+            clean_labels = (raw_label,)
+            action = "keep"
+        decisions[raw_label] = AbstractNodeCleaningDecision(
+            raw_label=raw_label,
+            action=action,
+            clean_labels=clean_labels,
+            reason=str(item.get("reason", "")).strip(),
+        )
+    return decisions
+
+
+def _coerce_clean_labels(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, list):
+        values = [str(item) for item in value]
+    else:
+        values = []
+    labels: list[str] = []
+    seen: set[str] = set()
+    for label in values:
+        cleaned = _clean_abstract_node_label(label)
+        if not cleaned:
+            continue
+        key = cleaned.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        labels.append(cleaned)
+    return tuple(labels[:ABSTRACT_NODE_MAX_EXPANSIONS])
+
+
+def _extract_json_value(response: str) -> Any:
+    response = response.strip()
+    try:
+        return json.loads(response)
+    except json.JSONDecodeError:
+        pass
+    start_positions = [pos for pos in (response.find("["), response.find("{")) if pos != -1]
+    if not start_positions:
+        return None
+    start = min(start_positions)
+    for end in range(len(response), start, -1):
+        try:
+            return json.loads(response[start:end])
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _strip_thinking_blocks(response: str) -> str:
+    return re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL | re.IGNORECASE).strip()
+
+
+def _unique_clean_labels(labels: Sequence[str]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for label in labels:
+        cleaned = _clean_abstract_node_label(label)
+        if not cleaned:
+            continue
+        key = cleaned.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(cleaned)
+    return unique
+
+
+def _abstract_context_fingerprint(abstract: str) -> str:
+    return re.sub(r"\s+", " ", abstract[:500]).strip()
 
 
 def _clean_abstract_node_label(label: str) -> str:
@@ -565,6 +897,18 @@ def _is_usable_abstract_node_label(label: str) -> bool:
 
 def _word_count(label: str) -> int:
     return len(re.findall(r"[A-Za-z0-9]+", label))
+
+
+def write_abstract_node_cleaning_csv(
+    records: Iterable[AbstractNodeCleaningRecord],
+    output_path: str | Path,
+) -> None:
+    fields = list(AbstractNodeCleaningRecord.__dataclass_fields__)
+    with Path(output_path).open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for record in records:
+            writer.writerow({field: getattr(record, field) for field in fields})
 
 
 def _relation_entity_uri(label: str, *, award_uri: str, base_uri: str) -> str:
