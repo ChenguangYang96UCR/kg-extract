@@ -44,6 +44,23 @@ KGGEN_BOILERPLATE_PATTERNS = [
     ),
 ]
 
+ABSTRACT_NODE_MAX_EXPANSIONS = 6
+ABSTRACT_NODE_MAX_WORDS = 10
+ABSTRACT_NODE_TRAILING_PREPOSITIONS = {
+    "about",
+    "at",
+    "by",
+    "for",
+    "from",
+    "in",
+    "into",
+    "of",
+    "on",
+    "through",
+    "to",
+    "with",
+}
+
 
 class MissingBackendDependency(RuntimeError):
     """Raised when an optional abstract extraction backend is not installed."""
@@ -318,59 +335,236 @@ def extract_abstract_triples(
             processed += 1
             award_uri = f"{base_uri}award/{number}"
             context = clean_excel_literal(row.get("Title"))
-            for relation in backend.extract(text, context=context):
-                if relation.confidence is not None and relation.confidence < min_confidence:
-                    continue
-                relation_count += 1
-                subject_uri = _relation_entity_uri(
-                    relation.subject, award_uri=award_uri, base_uri=base_uri
-                )
-                object_uri = entity_uri(base_uri, "concept", relation.object)
-                predicate_uri = f"{base_uri}vocab/{slug(relation.predicate)}"
-                confidence = "" if relation.confidence is None else f"{relation.confidence:.6f}"
-                evidence = relation.evidence or text
-                triples.append(
-                    Triple(
-                        subject=subject_uri,
-                        predicate=predicate_uri,
-                        object=object_uri,
-                        object_type="iri",
-                        award_number=number,
-                        source_column="Abstract",
-                        evidence=evidence,
-                        confidence=confidence,
-                        extractor=backend.name,
+            for raw_relation in backend.extract(text, context=context):
+                for relation in _postprocess_abstract_relation(raw_relation):
+                    if relation.confidence is not None and relation.confidence < min_confidence:
+                        continue
+                    relation_count += 1
+                    subject_uri = _relation_entity_uri(
+                        relation.subject, award_uri=award_uri, base_uri=base_uri
                     )
-                )
-                for uri, label in (
-                    (subject_uri, relation.subject),
-                    (object_uri, relation.object),
-                ):
-                    if uri == award_uri:
-                        continue
-                    include_metadata = (uri, label) not in labelled
-                    include_mention = (award_uri, uri) not in mentioned
-                    if not include_metadata and not include_mention:
-                        continue
-                    if include_metadata:
-                        labelled.add((uri, label))
-                    if include_mention:
-                        mentioned.add((award_uri, uri))
-                    triples.extend(
-                        _concept_metadata(
-                            uri,
-                            label,
-                            award_uri=award_uri,
-                            number=number,
+                    object_uri = entity_uri(base_uri, "concept", relation.object)
+                    predicate_uri = f"{base_uri}vocab/{slug(relation.predicate)}"
+                    confidence = "" if relation.confidence is None else f"{relation.confidence:.6f}"
+                    evidence = relation.evidence or text
+                    triples.append(
+                        Triple(
+                            subject=subject_uri,
+                            predicate=predicate_uri,
+                            object=object_uri,
+                            object_type="iri",
+                            award_number=number,
+                            source_column="Abstract",
                             evidence=evidence,
                             confidence=confidence,
                             extractor=backend.name,
-                            base_uri=base_uri,
-                            include_metadata=include_metadata,
-                            include_mention=include_mention,
                         )
                     )
+                    for uri, label in (
+                        (subject_uri, relation.subject),
+                        (object_uri, relation.object),
+                    ):
+                        if uri == award_uri:
+                            continue
+                        include_metadata = (uri, label) not in labelled
+                        include_mention = (award_uri, uri) not in mentioned
+                        if not include_metadata and not include_mention:
+                            continue
+                        if include_metadata:
+                            labelled.add((uri, label))
+                        if include_mention:
+                            mentioned.add((award_uri, uri))
+                        triples.extend(
+                            _concept_metadata(
+                                uri,
+                                label,
+                                award_uri=award_uri,
+                                number=number,
+                                evidence=evidence,
+                                confidence=confidence,
+                                extractor=backend.name,
+                                base_uri=base_uri,
+                                include_metadata=include_metadata,
+                                include_mention=include_mention,
+                            )
+                        )
     return triples, AbstractExtractionStats(processed, relation_count, len(triples))
+
+
+def _postprocess_abstract_relation(relation: AbstractRelation) -> list[AbstractRelation]:
+    subjects = _postprocess_abstract_node_label(relation.subject)
+    objects = _postprocess_abstract_node_label(relation.object)
+    if not subjects or not objects:
+        return []
+
+    processed: list[AbstractRelation] = []
+    seen: set[tuple[str, str]] = set()
+    for subject in subjects:
+        for obj in objects:
+            key = (subject.casefold(), obj.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            processed.append(
+                AbstractRelation(
+                    subject=subject,
+                    predicate=relation.predicate,
+                    object=obj,
+                    confidence=relation.confidence,
+                    evidence=relation.evidence,
+                )
+            )
+            if len(processed) >= ABSTRACT_NODE_MAX_EXPANSIONS:
+                return processed
+    return processed
+
+
+def _postprocess_abstract_node_label(label: str) -> list[str]:
+    cleaned = _clean_abstract_node_label(label)
+    if not cleaned:
+        return []
+    if _is_project_action_label(cleaned):
+        return ["project"]
+
+    candidates = _expand_supported_concept_label(cleaned)
+    if not candidates:
+        candidates = [cleaned]
+
+    labels: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate = _condense_abstract_node_label(candidate)
+        for part in _split_abstract_node_label(candidate):
+            part = _condense_abstract_node_label(part)
+            part = _clean_abstract_node_label(part)
+            if not _is_usable_abstract_node_label(part):
+                continue
+            key = part.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            labels.append(part)
+            if len(labels) >= ABSTRACT_NODE_MAX_EXPANSIONS:
+                return labels
+    return labels
+
+
+def _clean_abstract_node_label(label: str) -> str:
+    label = str(label or "").replace("\u00a0", " ")
+    label = re.sub(r"\s+", " ", label).strip(" \t\r\n\"'`.,;:")
+    label = re.sub(r"\s+\)", ")", label)
+    label = re.sub(r"\(\s+", "(", label)
+    label = re.sub(r"\s{2,}", " ", label)
+    label = re.sub(r"^(?:and|or)\s+", "", label, flags=re.IGNORECASE)
+    label = re.sub(r"^(?:a|an|the)\s+", "", label, flags=re.IGNORECASE)
+    return label.strip()
+
+
+def _is_project_action_label(label: str) -> bool:
+    return bool(
+        re.match(
+            r"^(?:this\s+|the\s+|proposed\s+)?project(?:'s)?\s+"
+            r"(?:will\s+)?(?:aims?|seeks?|plans?|intends?|is\s+designed)\s+to\b",
+            label,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _expand_supported_concept_label(label: str) -> list[str]:
+    match = re.match(
+        r"^(?P<head>.+?)\s+that\s+supports?\s+(?P<tail>.+)$",
+        label,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return []
+    head = _clean_abstract_node_label(match.group("head"))
+    tail_parts = _split_abstract_node_label(match.group("tail"))
+    if not head or len(tail_parts) < 2:
+        return []
+    if _word_count(head) <= 3:
+        return [_clean_abstract_node_label(f"{part} {head}") for part in tail_parts]
+    return tail_parts
+
+
+def _condense_abstract_node_label(label: str) -> str:
+    label = _clean_abstract_node_label(label)
+    if not label:
+        return ""
+
+    support_match = re.search(r"\bsupport\s+for\s+(.+)$", label, flags=re.IGNORECASE)
+    if support_match and _word_count(label) > ABSTRACT_NODE_MAX_WORDS:
+        label = support_match.group(1)
+
+    through_match = re.match(
+        r"^(?P<head>.+?)\s+through\s+.+?\s+in\s+(?P<domain>.+)$",
+        label,
+        flags=re.IGNORECASE,
+    )
+    if through_match:
+        head = _clean_abstract_node_label(through_match.group("head"))
+        domain = _clean_abstract_node_label(through_match.group("domain"))
+        if head and domain:
+            label = f"{domain} {head}"
+
+    for marker in (" that ", " which ", " where "):
+        left, separator, _ = label.partition(marker)
+        if separator and _word_count(left) >= 2:
+            label = left
+            break
+
+    enhanced_match = re.match(r"^(.+?)\s+enhanced\s+by\s+.+$", label, flags=re.IGNORECASE)
+    if enhanced_match and _word_count(enhanced_match.group(1)) >= 2:
+        label = enhanced_match.group(1)
+
+    label = re.sub(
+        r"\s+for\s+(?:instructional|educational|training|learning|research)\s+purposes?$",
+        "",
+        label,
+        flags=re.IGNORECASE,
+    )
+    return _clean_abstract_node_label(label)
+
+
+def _split_abstract_node_label(label: str) -> list[str]:
+    label = _clean_abstract_node_label(label)
+    if not re.search(r",|;|\s+(?:and|or)\s+", label, flags=re.IGNORECASE):
+        return [label] if label else []
+
+    has_list_punctuation = bool(re.search(r",|;", label))
+    parts = [
+        _clean_abstract_node_label(part)
+        for part in re.split(r"\s*(?:,|;)\s*|\s+(?:and|or)\s+", label, flags=re.IGNORECASE)
+    ]
+    parts = [part for part in parts if part]
+    if len(parts) < 2 or len(parts) > ABSTRACT_NODE_MAX_EXPANSIONS:
+        return [label]
+
+    first_words = parts[0].split()
+    if not has_list_punctuation and len(first_words) >= 2:
+        prefix = " ".join(first_words[:-1])
+        for index in range(1, len(parts)):
+            if _word_count(parts[index]) == 1:
+                parts[index] = f"{prefix} {parts[index]}"
+    return parts
+
+
+def _is_usable_abstract_node_label(label: str) -> bool:
+    if not label:
+        return False
+    words = label.split()
+    if len(words) > ABSTRACT_NODE_MAX_WORDS:
+        return False
+    if words[-1].casefold() in ABSTRACT_NODE_TRAILING_PREPOSITIONS:
+        return False
+    if label.casefold() in {"and", "or", "that", "which", "where"}:
+        return False
+    return True
+
+
+def _word_count(label: str) -> int:
+    return len(re.findall(r"[A-Za-z0-9]+", label))
 
 
 def _relation_entity_uri(label: str, *, award_uri: str, base_uri: str) -> str:

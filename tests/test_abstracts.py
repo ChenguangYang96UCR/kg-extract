@@ -108,6 +108,33 @@ class FakeBackend:
         ]
 
 
+class FakeLongNodeBackend:
+    name = "fake:long-node"
+
+    def extract(self, text, *, context=""):
+        del text, context
+        return [
+            AbstractRelation(
+                "This project",
+                "updates",
+                "infrastructure that supports data science, machine learning, and AI",
+                confidence=0.8,
+            ),
+            AbstractRelation(
+                "AI-Driven Assessments integration with human evaluations",
+                "enhance",
+                "evaluation accuracy and reliability",
+                confidence=0.7,
+            ),
+            AbstractRelation(
+                "project aim to understand how learners interact with",
+                "provide valuable insights into",
+                "human-AI dynamics in education",
+                confidence=0.6,
+            ),
+        ]
+
+
 class BackendTests(unittest.TestCase):
     def test_kggen_normalizes_graph_relations(self):
         client = FakeKGGenClient()
@@ -218,6 +245,67 @@ class AbstractTripleTests(unittest.TestCase):
         mentions = [t for t in triples if t.predicate.endswith("/mentions")]
         self.assertEqual(len(mentions), 2)
         self.assertEqual({t.award_number for t in mentions}, {"1", "2"})
+
+    def test_long_abstract_nodes_are_condensed_and_split(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "awards.csv"
+            with path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle, fieldnames=["AwardNumber", "Title", "Abstract"]
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "AwardNumber": "42",
+                        "Title": "Long Node Award",
+                        "Abstract": "This project updates AI infrastructure.",
+                    }
+                )
+
+            triples, stats = extract_abstract_triples(path, FakeLongNodeBackend())
+
+        relation_objects = {
+            triple.object
+            for triple in triples
+            if triple.source_column == "Abstract" and triple.object_type == "iri"
+        }
+        self.assertIn(
+            "https://example.org/nsf/concept/data-science-infrastructure",
+            relation_objects,
+        )
+        self.assertIn(
+            "https://example.org/nsf/concept/machine-learning-infrastructure",
+            relation_objects,
+        )
+        self.assertIn("https://example.org/nsf/concept/ai-infrastructure", relation_objects)
+        self.assertIn("https://example.org/nsf/concept/evaluation-accuracy", relation_objects)
+        self.assertIn("https://example.org/nsf/concept/evaluation-reliability", relation_objects)
+        self.assertGreater(stats.relations, 3)
+
+    def test_project_action_nodes_are_grounded_to_the_award(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "awards.csv"
+            with path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle, fieldnames=["AwardNumber", "Title", "Abstract"]
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "AwardNumber": "42",
+                        "Title": "Project Action Award",
+                        "Abstract": "This project studies human-AI dynamics.",
+                    }
+                )
+
+            triples, _ = extract_abstract_triples(path, FakeLongNodeBackend())
+
+        insight_relation = next(
+            triple
+            for triple in triples
+            if triple.predicate.endswith("/provide-valuable-insights-into")
+        )
+        self.assertEqual(insight_relation.subject, "https://example.org/nsf/award/42")
 
 
 if __name__ == "__main__":
