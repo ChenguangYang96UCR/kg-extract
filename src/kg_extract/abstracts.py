@@ -149,7 +149,11 @@ class KGGenBackend:
             from kg_gen import KGGen
         except ImportError as exc:
             raise MissingBackendDependency(
-                "KGGen is not installed. Run: python3 -m pip install -e '.[kggen]'"
+                "KGGen could not be imported. "
+                f"Original import error: {exc}. "
+                "Install the KGGen dependencies with: "
+                "python -m pip install -e '.[kggen,litellm]' && "
+                "python -m pip install -e src/kg-gen"
             ) from exc
 
         options: dict[str, Any] = {"model": model, "temperature": temperature}
