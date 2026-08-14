@@ -135,11 +135,13 @@ class KGGenBackend:
         base_url: str | None = None,
         chunk_size: int = 5000,
         cluster: bool = True,
+        no_dspy: bool = True,
         client: Any | None = None,
     ) -> None:
         self.name = f"kggen:{model}"
         self.chunk_size = chunk_size
         self.cluster = cluster
+        self.no_dspy = no_dspy
         if client is not None:
             self.client = client
             return
@@ -171,6 +173,8 @@ class KGGenBackend:
             generate_options["cluster"] = self.cluster
         elif not self.cluster and "deduplication_method" in generate_parameters:
             generate_options["deduplication_method"] = None
+        if "no_dspy" in generate_parameters:
+            generate_options["no_dspy"] = self.no_dspy
 
         graph = self.client.generate(**generate_options)
         relations: list[AbstractRelation] = []

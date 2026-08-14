@@ -53,6 +53,30 @@ class FakeModernKGGenClient:
         return FakeGraph()
 
 
+class FakeNoDspyKGGenClient:
+    def __init__(self):
+        self.calls = []
+
+    def generate(
+        self,
+        input_data,
+        context="",
+        chunk_size=None,
+        deduplication_method="semhash",
+        no_dspy=False,
+    ):
+        self.calls.append(
+            {
+                "input_data": input_data,
+                "context": context,
+                "chunk_size": chunk_size,
+                "deduplication_method": deduplication_method,
+                "no_dspy": no_dspy,
+            }
+        )
+        return FakeGraph()
+
+
 class FakeUIEPipeline:
     def __call__(self, text):
         start = text.index("This project")
@@ -237,6 +261,12 @@ class BackendTests(unittest.TestCase):
         backend = KGGenBackend(client=client, model="test/model", cluster=False)
         backend.extract("Source text", context="Award title")
         self.assertIsNone(client.calls[0]["deduplication_method"])
+
+    def test_kggen_uses_litellm_prompt_path_when_supported(self):
+        client = FakeNoDspyKGGenClient()
+        backend = KGGenBackend(client=client, model="test/model")
+        backend.extract("Source text", context="Award title")
+        self.assertTrue(client.calls[0]["no_dspy"])
 
     def test_uie_flattens_nested_predictions_and_preserves_confidence(self):
         backend = UIEBackend(pipeline=FakeUIEPipeline(), model="uie-test")
