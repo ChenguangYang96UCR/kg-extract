@@ -25,7 +25,8 @@ set -euo pipefail
 #   ABSTRACT_LIMIT=5 bash scripts/run_kggen_node_cleaner.sh
 #
 # Environment overrides:
-#   KG_EXTRACT_BIN                Command used to run kg-extract. Default: kg-extract
+#   PYTHON                        Python executable. Default: python
+#   KG_EXTRACT_BIN                Command used to run kg-extract. Default: python -m kg_extract
 #   KGGEN_MODEL                   KGGen model. Default: ollama_chat/deepseek-r1:32b
 #   KGGEN_API_BASE                Optional KGGen provider base URL.
 #   KGGEN_API_KEY_ENV             Optional environment variable containing the KGGen provider API key.
@@ -45,7 +46,8 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 INPUT_CSV="${1:-data/llm/filtered/awards_start_2024.csv}"
 
-KG_EXTRACT_BIN="${KG_EXTRACT_BIN:-kg-extract}"
+PYTHON="${PYTHON:-python}"
+KG_EXTRACT_BIN="${KG_EXTRACT_BIN:-${PYTHON} -m kg_extract}"
 KGGEN_MODEL="${KGGEN_MODEL:-ollama_chat/deepseek-r1:32b}"
 KGGEN_CHUNK_SIZE="${KGGEN_CHUNK_SIZE:-5000}"
 KGGEN_DEDUPLICATE="${KGGEN_DEDUPLICATE:-0}"
@@ -57,6 +59,11 @@ NODE_CLEANER_TEMPERATURE="${NODE_CLEANER_TEMPERATURE:-0.0}"
 MIN_CONFIDENCE="${MIN_CONFIDENCE:-0.0}"
 
 cd "${PROJECT_ROOT}"
+
+# Prefer the current checkout over any previously installed console script.
+# This matters because kg-extract and the vendored src/kg-gen package are both
+# under active local development in this project.
+export PYTHONPATH="${PROJECT_ROOT}/src:${PROJECT_ROOT}/src/kg-gen/src${PYTHONPATH:+:${PYTHONPATH}}"
 
 if [[ ! -f "${INPUT_CSV}" ]]; then
   echo "Input CSV does not exist: ${INPUT_CSV}" >&2
@@ -145,6 +152,8 @@ echo "Input CSV: ${INPUT_CSV}"
 echo "Output directory: ${OUTPUT_DIR}"
 echo "KGGen model: ${KGGEN_MODEL}"
 echo "KGGen chunk size: ${KGGEN_CHUNK_SIZE}"
+echo "Python: ${PYTHON}"
+echo "PYTHONPATH head: ${PROJECT_ROOT}/src:${PROJECT_ROOT}/src/kg-gen/src"
 if [[ -n "${ABSTRACT_LIMIT:-}" ]]; then
   echo "Abstract limit: ${ABSTRACT_LIMIT}"
 else
@@ -157,6 +166,17 @@ else
   echo "Node cleaner: disabled"
 fi
 echo
+
+"${PYTHON}" -c 'import inspect
+import kg_extract
+from kg_gen import KGGen
+print(f"kg_extract import: {kg_extract.__file__}")
+print(f"KGGen.generate supports no_dspy: {'no_dspy' in inspect.signature(KGGen.generate).parameters}")' || {
+  echo "Could not inspect kg_extract/kg_gen imports. Continuing to run extraction..." >&2
+}
+
+read -r -a kg_extract_command <<< "${KG_EXTRACT_BIN}"
+
 echo "Running KGGen Abstract extraction..."
 
-"${KG_EXTRACT_BIN}" "${command_args[@]}"
+"${kg_extract_command[@]}" "${command_args[@]}"
